@@ -33,17 +33,34 @@ Describe 'Agentes SOC' {
         $fm = Get-Frontmatter -Path $p
         [string]$fm['tools'] | Should -BeExactly 'Read, Grep, Glob'
     }
+    # Solo el cuerpo (sin frontmatter), para que la description no satisfaga la comprobacion.
+    # Los .ps1 son ASCII: las tildes se construyen con [char] (0xF3 = o con tilde).
     It '<Name>: el cuerpo contiene <Needle>' -ForEach @(
         @{ Name = 'alert-triage';       Needle = 'sanitiz' }
         @{ Name = 'alert-triage';       Needle = 'Severidad' }
+        @{ Name = 'alert-triage';       Needle = ('**Hip' + [char]0xF3 + 'tesis**') }
         @{ Name = 'detection-engineer'; Needle = 'Sigma' }
         @{ Name = 'detection-engineer'; Needle = 'YARA' }
         @{ Name = 'detection-engineer'; Needle = 'ATT&CK' }
     ) {
         $p = Join-Path $script:repoRoot "claude\agents\$Name.md"
         $p | Should -Exist
-        $text = Get-Content -Raw -LiteralPath $p
-        $text.Contains($Needle) | Should -BeTrue
+        $raw = [IO.File]::ReadAllText($p, [Text.Encoding]::UTF8)
+        $m = [regex]::Match($raw, '(?s)\A---\r?\n.*?\r?\n---\r?\n(.*)\z')
+        $m.Success | Should -BeTrue -Because "frontmatter de $Name"
+        $body = $m.Groups[1].Value
+        $body.Length | Should -BeGreaterThan 0
+        $body.Contains($Needle) | Should -BeTrue
+    }
+    It '<Name>: la description lleva tildes (<Word>)' -ForEach @(
+        @{ Name = 'alert-triage';       Word = ('hip' + [char]0xF3 + 'tesis') }
+        @{ Name = 'detection-engineer'; Word = ('detecci' + [char]0xF3 + 'n') }
+    ) {
+        $p = Join-Path $script:repoRoot "claude\agents\$Name.md"
+        $raw = [IO.File]::ReadAllText($p, [Text.Encoding]::UTF8)
+        $m = [regex]::Match($raw, '(?m)^description:\s*(.+)$')
+        $m.Success | Should -BeTrue
+        $m.Groups[1].Value.Contains($Word) | Should -BeTrue
     }
 }
 
