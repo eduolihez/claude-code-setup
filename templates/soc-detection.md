@@ -8,7 +8,7 @@
 ## Comandos
 - Validar reglas: `sigma check rules/`
 - Convertir a la plataforma objetivo: `sigma convert -t <backend> -p <pipeline> rules/`
-- Compilar YARA: `yarac rules/yara/<regla>.yar /dev/null`
+- Compilar YARA: `yarac rules/yara/<regla>.yar <regla>.yarc`
 - Tests de casos: <comando del proyecto para ejecutar los casos positivos y negativos>
 
 ## Convenciones
