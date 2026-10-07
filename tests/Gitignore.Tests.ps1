@@ -22,4 +22,16 @@ Describe 'gitignore allowlist' {
     ) {
         Test-GitIgnored -RepoRoot $script:Root -Path $_ | Should -BeFalse
     }
+
+    # La allowlist solo re-incluye claude/skills/*/SKILL.md: un archivo extra en una skill
+    # quedaria ignorado en silencio. Este test lo hace fallar de forma visible.
+    It 'no ignora ningun archivo presente bajo claude/skills' {
+        $skills = Join-Path $script:Root 'claude\skills'
+        $files = @(Get-ChildItem -LiteralPath $skills -Recurse -File)
+        $files.Count | Should -BeGreaterThan 0
+        foreach ($f in $files) {
+            $rel = $f.FullName.Substring($script:Root.TrimEnd('\').Length + 1).Replace('\', '/')
+            Test-GitIgnored -RepoRoot $script:Root -Path $rel | Should -BeFalse -Because $rel
+        }
+    }
 }
