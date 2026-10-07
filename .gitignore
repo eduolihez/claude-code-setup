@@ -6,6 +6,7 @@
 !.gitattributes
 !.gitleaks.toml
 !.markdownlint.jsonc
+!.markdownlint-cli2.jsonc
 !PSScriptAnalyzerSettings.psd1
 !LICENSE
 !README.md

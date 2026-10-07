@@ -1,0 +1,6 @@
+{
+  // Fuera del lint: archivos de configuracion de Claude y plantillas de CLAUDE.md.
+  // Son prompts con frontmatter y formato compacto a proposito, no documentacion.
+  // docs/superpowers (diseno interno) y .superpowers se excluyen en la linea de comandos.
+  "ignores": ["claude/**", "templates/**"]
+}

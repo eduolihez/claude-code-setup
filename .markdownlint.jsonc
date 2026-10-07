@@ -1,0 +1,4 @@
+{
+  // MD013 (longitud de linea) desactivada: la prosa en espanol va en una linea por parrafo.
+  "MD013": false
+}
