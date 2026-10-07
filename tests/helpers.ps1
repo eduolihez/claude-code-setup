@@ -40,7 +40,23 @@ function Invoke-Script {
 
     $proc = New-Object System.Diagnostics.Process
     $proc.StartInfo = $psi
-    [void]$proc.Start()
+    # .NET Framework crea StandardInput con la codificacion de entrada de la consola del padre.
+    # Si es UTF-8 con preambulo (runners de CI), emite un BOM al abrir el flujo y el hijo lo lee
+    # como texto. Se fuerza UTF-8 sin BOM solo durante el arranque y se restaura despues.
+    $prevInputEncoding = $null
+    try {
+        $prevInputEncoding = [Console]::InputEncoding
+        [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false)
+    }
+    catch { $prevInputEncoding = $null }
+    try {
+        [void]$proc.Start()
+    }
+    finally {
+        if ($null -ne $prevInputEncoding) {
+            try { [Console]::InputEncoding = $prevInputEncoding } catch { }
+        }
+    }
     try {
         # Read both streams asynchronously to avoid pipe deadlocks.
         $outTask = $proc.StandardOutput.ReadToEndAsync()

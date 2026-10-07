@@ -21,3 +21,32 @@ Describe 'Invoke-Script quoting de argumentos' {
         }
     }
 }
+
+Describe 'Invoke-Script stdin sin BOM' {
+    It 'no antepone BOM a stdin aunque la codificacion de entrada de la consola del padre sea UTF-8' {
+        # En los runners de CI la consola del padre es UTF-8 (cp 65001) y .NET Framework
+        # emite un BOM al crear el flujo de entrada del proceso hijo.
+        $probe = Join-Path $TestDrive 'bom-probe.ps1'
+        Set-Content -Path $probe -Encoding ASCII -Value '$t = [Console]::In.ReadToEnd(); [string][int]$t[0]'
+        $prev = $null
+        $switched = $false
+        try {
+            $prev = [Console]::InputEncoding
+            [Console]::InputEncoding = [System.Text.Encoding]::UTF8
+            $switched = $true
+        }
+        catch { }
+        if (-not $switched) {
+            Set-ItResult -Skipped -Because 'no se puede cambiar la codificacion de entrada de la consola'
+            return
+        }
+        try {
+            $r = Invoke-Script -Path $probe -StdinText '{"a":1}'
+        }
+        finally {
+            [Console]::InputEncoding = $prev
+        }
+        $r.ExitCode | Should -Be 0
+        $r.Stdout.Trim() | Should -Be '123'
+    }
+}
