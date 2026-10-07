@@ -23,7 +23,7 @@ function Invoke-Script {
         [int]$TimeoutSeconds = 60
     )
     # Quote an argument for a Windows command line (handles spaces and quotes).
-    $quote = { param($a) '"' + ($a -replace '(\*)"', '$1$1\"' -replace '(\+)$', '$1$1') + '"' }
+    $quote = { param($a) '"' + ($a -replace '(\\*)"', '$1$1\"' -replace '(\\+)$', '$1$1') + '"' }
     $parts = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (& $quote $Path))
     foreach ($a in $Arguments) { $parts += (& $quote $a) }
 
