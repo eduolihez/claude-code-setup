@@ -20,7 +20,7 @@
 - Los fixtures de secretos en tests se construyen en tiempo de ejecución (`'AKIA' + 'IOSFODNN7EXAMPLE'`) para no disparar gitleaks sobre el propio repo. Los IOCs de ejemplo usan rangos reservados (`example.com`, `192.0.2.0/24`).
 - Rutas gestionadas por el instalador, y solo estas: `CLAUDE.md`, `settings.json`, cada archivo de `claude/agents/` y `claude/hooks/`, y cada carpeta de `claude/skills/`. Nunca `.credentials.json`, `projects/`, `sessions/` ni `history.jsonl`.
 - Backups en `<TargetDir>\backups\setup-YYYYMMDD-HHMMSS\`. Flags del instalador: `-DryRun`, `-Copy`, `-Uninstall`. Falla con código distinto de cero si algo no verifica.
-- Rutas de hooks en `settings.json` usan `%USERPROFILE%`; ningún archivo versionado contiene `C:\Users` ni `<usuario>` (salvo el handle público `eduolihez` en docs).
+- Rutas de hooks en `settings.json` usan `%USERPROFILE%`; ningún archivo versionado contiene rutas de perfil (`C:` + `\Users\...`) ni el nombre de usuario local (salvo el handle público `eduolihez` en docs).
 - Agentes nuevos: `tools: Read, Grep, Glob` (sin escritura ni ejecución).
 - CI en cada `push` y `pull_request`: gitleaks, PSScriptAnalyzer, Pester, markdownlint.
 - Commits pequeños en imperativo, sin force-push; cada mensaje termina con `Co-Authored-By: Claude Sonnet 5.5 <noreply@anthropic.com>`.
@@ -84,12 +84,12 @@
 - [ ] **Step 1: Escribir `Definitions.Tests.ps1` (falla)**:
   - Cada agente: `name` igual al nombre de archivo sin extensión, `description` y `tools` no vacíos.
   - Cada skill: `name` igual al nombre de su carpeta, `description` no vacía.
-  - `settings.json` es JSON válido y su texto no contiene `C:\Users` ni `<usuario>`.
+  - `settings.json` es JSON válido y su texto no contiene rutas de perfil (`C:` + `\Users`) ni el nombre de usuario local.
   - Todo `command` de hook en `settings.json` contiene `%USERPROFILE%`.
   - `claude/` no contiene `.credentials.json`, `history.jsonl`, `projects`, `sessions` ni `backups`.
 - [ ] **Step 2: Ejecutar** el runner. Esperado: FAIL (no existe `claude/`).
 - [ ] **Step 3: Copiar** desde `<ruta-local-de-.claude>` solo los 9 archivos de la lista (`Copy-Item`, nunca el directorio entero).
-- [ ] **Step 4: Revisión manual de secretos**: `git grep -n -i -E "token|secret|password|api[_-]?key|<usuario>|C:\\\\Users"` sobre `claude/`. Esperado: sin coincidencias; si aparece alguna, se corrige antes de continuar y se muestra al usuario.
+- [ ] **Step 4: Revisión manual de secretos**: `git grep -n -i -E "token|secret|password|api[_-]?key|<usuario>|C:\\\\Users"` sobre `claude/` (`<usuario>` es el nombre de usuario local). Esperado: sin coincidencias; si aparece alguna, se corrige antes de continuar y se muestra al usuario.
 - [ ] **Step 5: Ejecutar** el runner. Esperado: PASS.
 - [ ] **Step 6: Commit** — `feat: importa el setup actual (CLAUDE.md, settings, agentes, hooks y skills propias)`.
 
@@ -244,14 +244,15 @@
 **Files:** ninguno nuevo (solo comandos de verificación y publicación).
 
 - [ ] **Step 1: Verificación completa**, mostrando cada salida al usuario:
-  - `powershell -NoProfile -File tests/Invoke-Tests.ps1`: 0 fallos.
-  - `Invoke-ScriptAnalyzer ...` y `npx markdownlint-cli2 "**/*.md"`: sin hallazgos.
+  - `powershell -NoProfile -ExecutionPolicy Bypass -File tests/Invoke-Tests.ps1`: 0 fallos.
+  - `Invoke-ScriptAnalyzer ...` y `npx markdownlint-cli2 "**/*.md" "#docs/superpowers" "#.superpowers" "#node_modules"`: sin hallazgos.
   - `docker run --rm -v "<ruta-local>:/repo" zricethezav/gitleaks:latest detect --source /repo --log-opts="--all" -v`: `no leaks found`.
-  - `git ls-files` comparado con la allowlist, y `git grep -n -i -E "<usuario>|C:\\\\Users"` (solo se admite el handle `eduolihez` en docs).
-- [ ] **Step 2: Dry-run sobre el `~/.claude` real**: `powershell -NoProfile -File install.ps1 -DryRun`. Mostrar la salida; no instalar de verdad salvo que el usuario lo pida.
+  - `git ls-files` comparado con la allowlist, y `git grep -n -I -P "(?i)<usuario>(?!ihez)|C:\\\\Users"` sin salida (`<usuario>` es el nombre de usuario local; solo se admite el handle `eduolihez` en docs).
+- [ ] **Step 2: Dry-run sobre el `~/.claude` real**: `powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -DryRun`. Mostrar la salida; no instalar de verdad salvo que el usuario lo pida.
 - [ ] **Step 3: PARAR y pedir confirmación** al usuario para crear el repo remoto privado, enseñándole la salida del Step 1.
-- [ ] **Step 4: Con confirmación**, `gh repo create eduolihez/claude-code-setup --private --source . --remote origin --push --description "Mi setup de Claude Code: permisos, hooks, agentes y skills para SOC/Blue Team y desarrollo"`. Verificar con `gh repo view eduolihez/claude-code-setup --json visibility,url`: `PRIVATE`.
-- [ ] **Step 5: Verificar el CI remoto**: `gh run watch` sobre el último run. Esperado: todos los jobs en verde. Si falla, corregir y repetir antes de seguir.
+- [ ] **Step 4: Poner main al dia**: `git checkout main && git merge --ff-only feat/initial-setup`.
+- [ ] **Step 5: Con confirmación**, `gh repo create eduolihez/claude-code-setup --private --source . --remote origin --push --description "Mi setup de Claude Code: permisos, hooks, agentes y skills para SOC/Blue Team y desarrollo"`. Verificar con `gh repo view eduolihez/claude-code-setup --json visibility,url`: `PRIVATE`, y con `gh repo view eduolihez/claude-code-setup --json defaultBranchRef`: `main`.
+- [ ] **Step 6: Verificar el CI remoto**: `gh run watch` sobre el último run. Esperado: todos los jobs en verde. Si falla, corregir y repetir antes de seguir.
 
 ### Task 14: Paso a público (solo con confirmación explícita)
 

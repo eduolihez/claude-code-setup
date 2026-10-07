@@ -104,15 +104,17 @@ Describe 'settings.json' {
     It 'es JSON valido' {
         { Get-Content -Raw -LiteralPath $script:settingsPath | ConvertFrom-Json } | Should -Not -Throw
     }
-    It 'no contiene C:\Users ni <usuario>' {
+    # Las cadenas con la ruta de perfil y el nombre de usuario se construyen por concatenacion
+    # para que el propio archivo versionado no las contenga.
+    It 'no contiene la ruta de perfil de usuario ni el nombre de usuario local' {
         $text = Get-Content -Raw -LiteralPath $script:settingsPath
         $text | Should -Not -Match '(?i)C:[\\/]+Users'
-        $text | Should -Not -Match '(?i)<usuario>'
+        $text | Should -Not -Match ('(?i)' + 'edu' + 'ol')
     }
-    It 'el patron de C:\Users detecta <Text> = <Expected>' -ForEach @(
-        @{ Text = 'C:\Users\x';   Expected = $true }
-        @{ Text = 'C:\\Users\\x'; Expected = $true }
-        @{ Text = 'C:/otro';      Expected = $false }
+    It 'el patron de la ruta de perfil detecta <Text> = <Expected>' -ForEach @(
+        @{ Text = ('C:' + '\Users\x');     Expected = $true }
+        @{ Text = ('C:' + '\\Users\\x');   Expected = $true }
+        @{ Text = 'C:/otro';               Expected = $false }
     ) {
         ($Text -match '(?i)C:[\\/]+Users') | Should -Be $Expected
     }
