@@ -1,3 +1,24 @@
+BeforeDiscovery {
+    # Sondeo: se puede crear un symlink en este entorno? (en Windows requiere admin o modo desarrollador)
+    $script:canSymlink = $false
+    $probe = Join-Path ([System.IO.Path]::GetTempPath()) ('symprobe-' + [guid]::NewGuid().ToString('N'))
+    try {
+        New-Item -ItemType Directory -Path $probe | Out-Null
+        $f = Join-Path $probe 'f.txt'
+        Set-Content -LiteralPath $f -Value 'x'
+        New-Item -ItemType SymbolicLink -Path (Join-Path $probe 'l.txt') -Value $f -ErrorAction Stop | Out-Null
+        $script:canSymlink = $true
+    }
+    catch { $script:canSymlink = $false }
+    finally {
+        if (Test-Path -LiteralPath $probe) {
+            $l = Join-Path $probe 'l.txt'
+            if (Test-Path -LiteralPath $l) { [System.IO.File]::Delete($l) }
+            Remove-Item -LiteralPath $probe -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 BeforeAll {
     . (Join-Path $PSScriptRoot 'helpers.ps1')
     $script:repoRoot = Split-Path -Parent $PSScriptRoot
@@ -194,5 +215,173 @@ Describe 'install.ps1 (modo copia)' {
         $r = Invoke-Install $t
         $r.ExitCode | Should -Be 0 -Because $r.Stdout
         Test-Path -LiteralPath (Join-Path $t 'backups') | Should -BeFalse
+    }
+}
+
+Describe 'install.ps1 (enlaces, fallback y -Uninstall)' {
+    BeforeAll {
+        function Invoke-Link([string]$Target, [string[]]$Extra = @(), [hashtable]$Env = @{}) {
+            $saved = @{}
+            foreach ($k in $Env.Keys) {
+                $saved[$k] = [Environment]::GetEnvironmentVariable($k)
+                [Environment]::SetEnvironmentVariable($k, $Env[$k])
+            }
+            try { Invoke-Script -Path $script:installer -Arguments (@('-TargetDir', $Target) + $Extra) }
+            finally { foreach ($k in $saved.Keys) { [Environment]::SetEnvironmentVariable($k, $saved[$k]) } }
+        }
+
+        function Test-IsReparse([string]$Path) {
+            return (([System.IO.File]::GetAttributes($Path) -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)
+        }
+
+        # Entradas gestionadas de primer nivel (relativas a claude/): archivos y carpetas de skills.
+        function Get-ManagedEntries {
+            $list = @('CLAUDE.md', 'settings.json')
+            foreach ($d in 'agents', 'hooks') {
+                $list += @(Get-ChildItem -LiteralPath (Join-Path $script:src $d) -File | ForEach-Object { "$d\$($_.Name)" })
+            }
+            $list += @(Get-ChildItem -LiteralPath (Join-Path $script:src 'skills') -Directory | ForEach-Object { "skills\$($_.Name)" })
+            return $list
+        }
+
+        function New-FakeBackup([string]$Target, [string]$Name = 'setup-20260101-000000') {
+            $bk = Join-Path $Target "backups\$Name"
+            New-Item -ItemType Directory -Force -Path $bk | Out-Null
+            Set-Content -LiteralPath (Join-Path $bk 'CLAUDE.md') -Value 'MARCADOR-PREVIO'
+            return $bk
+        }
+    }
+
+    It 'con CLAUDE_SETUP_NO_SYMLINK=1 copia (archivos normales), avisa con "copia" y sale con 0' {
+        $t = Join-Path $TestDrive 'fallback'
+        New-Target $t
+        $entries = Get-ManagedEntries
+        $entries.Count | Should -BeGreaterThan 5
+        $r = Invoke-Link $t @() @{ CLAUDE_SETUP_NO_SYMLINK = '1' }
+        $r.ExitCode | Should -Be 0 -Because ($r.Stdout + $r.Stderr)
+        $r.Stdout | Should -Match 'AVISO.*copia'
+        foreach ($e in $entries) {
+            $p = Join-Path $t $e
+            Test-Path -LiteralPath $p | Should -BeTrue -Because $e
+            Test-IsReparse $p | Should -BeFalse -Because $e
+        }
+        foreach ($f in (Get-ManagedFiles)) {
+            Get-FileHashValue (Join-Path $t $f) | Should -Be (Get-FileHashValue (Join-Path $script:src $f)) -Because $f
+        }
+    }
+
+    It 'por defecto enlaza cada entrada gestionada al repo y reinstalar no crea backup (requiere symlinks: se omite si no se pueden crear sin admin)' -Skip:(-not $script:canSymlink) {
+        $t = Join-Path $TestDrive 'links'
+        New-Target $t
+        $entries = Get-ManagedEntries
+        $entries.Count | Should -BeGreaterThan 5
+        $r = Invoke-Link $t
+        $r.ExitCode | Should -Be 0 -Because ($r.Stdout + $r.Stderr)
+        foreach ($e in $entries) {
+            $item = Get-Item -LiteralPath (Join-Path $t $e) -Force
+            $item.LinkType | Should -Be 'SymbolicLink' -Because $e
+            $target = @($item.Target)[0]
+            [System.IO.Path]::GetFullPath($target).TrimEnd('\') | Should -Be ([System.IO.Path]::GetFullPath((Join-Path $script:src $e)).TrimEnd('\')) -Because $e
+        }
+        Test-Path -LiteralPath (Join-Path $t 'backups') | Should -BeFalse
+        $r2 = Invoke-Link $t
+        $r2.ExitCode | Should -Be 0 -Because ($r2.Stdout + $r2.Stderr)
+        Test-Path -LiteralPath (Join-Path $t 'backups') | Should -BeFalse
+    }
+
+    It '-Uninstall tras instalar sobre un CLAUDE.md con marcador restaura el marcador, quita lo gestionado y no toca lo ajeno' {
+        $t = Join-Path $TestDrive 'uninst'
+        New-Target $t
+        Set-Content -LiteralPath (Join-Path $t 'CLAUDE.md') -Value 'MARCADOR-PREVIO'
+        $others = '.credentials.json', 'history.jsonl', 'projects\p.txt', 'sessions\s.json', 'skills\gstack\SKILL.md', 'agents\mine.md'
+        $before = @{}
+        foreach ($o in $others) { $before[$o] = Get-FileHashValue (Join-Path $t $o) }
+        $markerHash = Get-FileHashValue (Join-Path $t 'CLAUDE.md')
+        $entries = Get-ManagedEntries
+        $r = Invoke-Link $t @() @{ CLAUDE_SETUP_NO_SYMLINK = '1' }
+        $r.ExitCode | Should -Be 0 -Because ($r.Stdout + $r.Stderr)
+        (Get-BackupDirs $t).Count | Should -Be 1
+        $u = Invoke-Link $t @('-Uninstall')
+        $u.ExitCode | Should -Be 0 -Because ($u.Stdout + $u.Stderr)
+        Test-Path -LiteralPath (Join-Path $t 'CLAUDE.md') | Should -BeTrue
+        Get-FileHashValue (Join-Path $t 'CLAUDE.md') | Should -Be $markerHash
+        foreach ($e in @($entries | Where-Object { $_ -ne 'CLAUDE.md' })) {
+            Test-Path -LiteralPath (Join-Path $t $e) | Should -BeFalse -Because $e
+        }
+        foreach ($o in $others) {
+            Get-FileHashValue (Join-Path $t $o) | Should -Be $before[$o] -Because $o
+        }
+    }
+
+    It '-Uninstall con symlinks no borra nada dentro del repo (requiere symlinks: se omite si no se pueden crear sin admin)' -Skip:(-not $script:canSymlink) {
+        $t = Join-Path $TestDrive 'uninst-links'
+        New-Target $t
+        Set-Content -LiteralPath (Join-Path $t 'CLAUDE.md') -Value 'MARCADOR-PREVIO'
+        $snap = Get-TreeHash $script:src
+        $snap.Length | Should -BeGreaterThan 0
+        $r = Invoke-Link $t
+        $r.ExitCode | Should -Be 0 -Because ($r.Stdout + $r.Stderr)
+        Test-IsReparse (Join-Path $t 'CLAUDE.md') | Should -BeTrue
+        $u = Invoke-Link $t @('-Uninstall')
+        $u.ExitCode | Should -Be 0 -Because ($u.Stdout + $u.Stderr)
+        Get-TreeHash $script:src | Should -Be $snap
+        foreach ($e in @(Get-ManagedEntries | Where-Object { $_ -ne 'CLAUDE.md' })) {
+            Test-Path -LiteralPath (Join-Path $t $e) | Should -BeFalse -Because $e
+        }
+        Get-Content -LiteralPath (Join-Path $t 'CLAUDE.md') | Should -Be 'MARCADOR-PREVIO'
+        Test-Path -LiteralPath (Join-Path $script:src 'CLAUDE.md') | Should -BeTrue
+    }
+
+    It '-Uninstall quita junctions de carpetas sin borrar el contenido al que apuntan' {
+        $t = Join-Path $TestDrive 'uninst-junction'
+        New-Target $t
+        $store = Join-Path $TestDrive 'junction-store'
+        New-Item -ItemType Directory -Force -Path $store | Out-Null
+        $skills = @(Get-ChildItem -LiteralPath (Join-Path $script:src 'skills') -Directory)
+        $skills.Count | Should -BeGreaterThan 0
+        foreach ($s in $skills) {
+            Copy-Item -LiteralPath $s.FullName -Destination (Join-Path $store $s.Name) -Recurse
+            New-Item -ItemType Junction -Path (Join-Path $t "skills\$($s.Name)") -Value (Join-Path $store $s.Name) | Out-Null
+        }
+        $storeHash = Get-TreeHash $store
+        $storeHash.Length | Should -BeGreaterThan 0
+        New-FakeBackup $t | Out-Null
+        foreach ($s in $skills) { Test-IsReparse (Join-Path $t "skills\$($s.Name)") | Should -BeTrue }
+        $u = Invoke-Link $t @('-Uninstall')
+        $u.ExitCode | Should -Be 0 -Because ($u.Stdout + $u.Stderr)
+        foreach ($s in $skills) {
+            Test-Path -LiteralPath (Join-Path $t "skills\$($s.Name)") | Should -BeFalse -Because $s.Name
+            Test-Path -LiteralPath (Join-Path $store $s.Name) | Should -BeTrue -Because $s.Name
+        }
+        Get-TreeHash $store | Should -Be $storeHash
+        Get-Content -LiteralPath (Join-Path $t 'CLAUDE.md') | Should -Be 'MARCADOR-PREVIO'
+        Test-Path -LiteralPath (Join-Path $t 'skills\gstack\SKILL.md') | Should -BeTrue
+    }
+
+    It '-Uninstall sin carpeta de backups falla con exit != 0 y no borra nada' {
+        $t = Join-Path $TestDrive 'uninst-nobk'
+        New-Target $t
+        $r0 = Invoke-Link $t @() @{ CLAUDE_SETUP_NO_SYMLINK = '1' }
+        $r0.ExitCode | Should -Be 0 -Because ($r0.Stdout + $r0.Stderr)
+        Test-Path -LiteralPath (Join-Path $t 'backups') | Should -BeFalse
+        $before = Get-TreeHash $t
+        $before.Length | Should -BeGreaterThan 0
+        $u = Invoke-Link $t @('-Uninstall')
+        $u.ExitCode | Should -Not -Be 0
+        $u.Stdout | Should -Match 'backup'
+        Get-TreeHash $t | Should -Be $before
+    }
+
+    It '-Uninstall -DryRun no cambia nada' {
+        $t = Join-Path $TestDrive 'uninst-dry'
+        New-Target $t
+        Set-Content -LiteralPath (Join-Path $t 'CLAUDE.md') -Value 'MARCADOR-PREVIO'
+        (Invoke-Link $t @() @{ CLAUDE_SETUP_NO_SYMLINK = '1' }).ExitCode | Should -Be 0
+        $before = Get-TreeHash $t
+        $before.Length | Should -BeGreaterThan 0
+        $u = Invoke-Link $t @('-Uninstall', '-DryRun')
+        $u.ExitCode | Should -Be 0 -Because ($u.Stdout + $u.Stderr)
+        $u.Stdout | Should -Match '\[DryRun\]'
+        Get-TreeHash $t | Should -Be $before
     }
 }
