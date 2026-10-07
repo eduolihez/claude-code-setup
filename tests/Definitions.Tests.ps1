@@ -23,6 +23,30 @@ Describe 'Agentes' {
     }
 }
 
+Describe 'Agentes SOC' {
+    It '<Name>: existe y tools es exactamente Read, Grep, Glob' -ForEach @(
+        @{ Name = 'alert-triage' }
+        @{ Name = 'detection-engineer' }
+    ) {
+        $p = Join-Path $script:repoRoot "claude\agents\$Name.md"
+        $p | Should -Exist
+        $fm = Get-Frontmatter -Path $p
+        [string]$fm['tools'] | Should -BeExactly 'Read, Grep, Glob'
+    }
+    It '<Name>: el cuerpo contiene <Needle>' -ForEach @(
+        @{ Name = 'alert-triage';       Needle = 'sanitiz' }
+        @{ Name = 'alert-triage';       Needle = 'Severidad' }
+        @{ Name = 'detection-engineer'; Needle = 'Sigma' }
+        @{ Name = 'detection-engineer'; Needle = 'YARA' }
+        @{ Name = 'detection-engineer'; Needle = 'ATT&CK' }
+    ) {
+        $p = Join-Path $script:repoRoot "claude\agents\$Name.md"
+        $p | Should -Exist
+        $text = Get-Content -Raw -LiteralPath $p
+        $text.Contains($Needle) | Should -BeTrue
+    }
+}
+
 Describe 'Skills' {
     It 'existe al menos una skill' {
         @(Get-ChildItem -Path (Join-Path $script:repoRoot 'claude\skills') -Directory -ErrorAction SilentlyContinue).Count | Should -BeGreaterThan 0
