@@ -286,6 +286,9 @@ Describe 'install.ps1 (enlaces, fallback y -Uninstall)' {
         Test-Path -LiteralPath (Join-Path $t 'backups') | Should -BeFalse
         $r2 = Invoke-Link $t
         $r2.ExitCode | Should -Be 0 -Because ($r2.Stdout + $r2.Stderr)
+        $r2.Stdout | Should -Match 'Sin cambios'
+        $r2.Stdout | Should -Not -Match 'Enlazar:'
+        $r2.Stdout | Should -Not -Match 'Backup:'
         Test-Path -LiteralPath (Join-Path $t 'backups') | Should -BeFalse
     }
 
@@ -383,5 +386,75 @@ Describe 'install.ps1 (enlaces, fallback y -Uninstall)' {
         $u.ExitCode | Should -Be 0 -Because ($u.Stdout + $u.Stderr)
         $u.Stdout | Should -Match '\[DryRun\]'
         Get-TreeHash $t | Should -Be $before
+    }
+
+    It 'modo enlace sobre copias identicas del repo las quita sin crear backup nuevo (seam sin symlinks)' {
+        $t = Join-Path $TestDrive 'seam'
+        New-Target $t
+        Set-Content -LiteralPath (Join-Path $t 'CLAUDE.md') -Value 'MARCADOR-PREVIO'
+        $r0 = Invoke-Link $t @() @{ CLAUDE_SETUP_NO_SYMLINK = '1' }
+        $r0.ExitCode | Should -Be 0 -Because ($r0.Stdout + $r0.Stderr)
+        $names = @(Get-BackupDirs $t | ForEach-Object { $_.Name })
+        $names.Count | Should -Be 1
+        # Fuerza el modo enlace: en maquinas sin privilegios la creacion falla (exit 1), pero la decision
+        # "copia identica -> borrar sin backup" ya se ha tomado y es lo que se comprueba.
+        $r = Invoke-Link $t @() @{ CLAUDE_SETUP_FORCE_LINKS = '1' }
+        $r.Stdout | Should -Match 'Quitar copia identica'
+        $r.Stdout | Should -Not -Match 'Backup:'
+        @(Get-BackupDirs $t | ForEach-Object { $_.Name }) | Should -Be $names
+        $bkDir = @(Get-BackupDirs $t)[0].FullName
+        $bkMarker = Join-Path $bkDir 'CLAUDE.md'
+        Get-Content -LiteralPath $bkMarker | Should -Be 'MARCADOR-PREVIO'
+    }
+
+    It 'secuencia fallback -> modo enlace -> -Uninstall restaura el marcador original (requiere symlinks: se omite si no se pueden crear sin admin)' -Skip:(-not $script:canSymlink) {
+        $t = Join-Path $TestDrive 'seq'
+        New-Target $t
+        Set-Content -LiteralPath (Join-Path $t 'CLAUDE.md') -Value 'MARCADOR-PREVIO'
+        $r0 = Invoke-Link $t @() @{ CLAUDE_SETUP_NO_SYMLINK = '1' }
+        $r0.ExitCode | Should -Be 0 -Because ($r0.Stdout + $r0.Stderr)
+        $names = @(Get-BackupDirs $t | ForEach-Object { $_.Name })
+        $names.Count | Should -Be 1
+        $r = Invoke-Link $t
+        $r.ExitCode | Should -Be 0 -Because ($r.Stdout + $r.Stderr)
+        Test-IsReparse (Join-Path $t 'CLAUDE.md') | Should -BeTrue
+        @(Get-BackupDirs $t | ForEach-Object { $_.Name }) | Should -Be $names
+        $u = Invoke-Link $t @('-Uninstall')
+        $u.ExitCode | Should -Be 0 -Because ($u.Stdout + $u.Stderr)
+        Test-IsReparse (Join-Path $t 'CLAUDE.md') | Should -BeFalse
+        Get-Content -LiteralPath (Join-Path $t 'CLAUDE.md') | Should -Be 'MARCADOR-PREVIO'
+    }
+
+    It 'aborta con exit != 0 si TargetDir\skills es una junction y no toca el contenido al que apunta' {
+        $t = Join-Path $TestDrive 'guard'
+        New-Target $t
+        Remove-Item -LiteralPath (Join-Path $t 'skills') -Recurse -Force
+        $store = Join-Path $TestDrive 'guard-store'
+        New-Item -ItemType Directory -Force -Path $store | Out-Null
+        Set-Content -LiteralPath (Join-Path $store 'a.txt') -Value 'dato'
+        New-Item -ItemType Junction -Path (Join-Path $t 'skills') -Value $store | Out-Null
+        $hash = Get-TreeHash $store
+        $hash.Length | Should -BeGreaterThan 0
+        foreach ($mode in @(@('-Copy'), @(), @('-Uninstall'))) {
+            $r = Invoke-Link $t $mode
+            $r.ExitCode | Should -Not -Be 0 -Because ($mode -join ' ')
+            $r.Stdout | Should -Match 'enlace'
+            Get-TreeHash $store | Should -Be $hash
+        }
+        Test-Path -LiteralPath (Join-Path $t 'backups') | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $t 'CLAUDE.md') | Should -BeFalse
+    }
+
+    It 'la sonda de symlinks no deja restos en TargetDir con -DryRun' {
+        $t = Join-Path $TestDrive 'probe-dry'
+        New-Target $t
+        $before = @(Get-ChildItem -LiteralPath $t -Force | ForEach-Object { $_.Name }) | Sort-Object
+        $r = Invoke-Link $t @('-DryRun')
+        $r.ExitCode | Should -Be 0 -Because ($r.Stdout + $r.Stderr)
+        @(Get-ChildItem -LiteralPath $t -Force | ForEach-Object { $_.Name }) | Sort-Object | Should -Be $before
+        Test-Path -LiteralPath (Join-Path $TestDrive 'probe-new') | Should -BeFalse
+        $r2 = Invoke-Link (Join-Path $TestDrive 'probe-new\sub') @('-DryRun')
+        $r2.ExitCode | Should -Be 0 -Because ($r2.Stdout + $r2.Stderr)
+        Test-Path -LiteralPath (Join-Path $TestDrive 'probe-new') | Should -BeFalse
     }
 }

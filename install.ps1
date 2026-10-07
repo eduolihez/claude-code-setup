@@ -66,10 +66,16 @@ function Test-LinkedToRepo([string]$Src, [string]$Dst) {
     catch { return $false }
 }
 
-# Sondea si se pueden crear symlinks (archivo y carpeta) en un directorio temporal.
-function Test-CanSymlink {
+# Sondea si se pueden crear symlinks (archivo y carpeta) en el volumen de $BaseDir (se limpia siempre).
+function Test-CanSymlink([string]$BaseDir) {
     if ($env:CLAUDE_SETUP_NO_SYMLINK -eq '1') { return $false }
-    $probe = Join-Path ([System.IO.Path]::GetTempPath()) ('claude-setup-probe-' + [guid]::NewGuid().ToString('N'))
+    # Solo para tests: fuerza el modo enlace sin sondear (la creacion real puede fallar).
+    if ($env:CLAUDE_SETUP_FORCE_LINKS -eq '1') { return $true }
+    # Se usa el ancestro existente mas cercano para no crear TargetDir (ni en -DryRun).
+    $root = $BaseDir
+    while ($root -and -not (Test-Path -LiteralPath $root -PathType Container)) { $root = Split-Path -Parent $root }
+    if (-not $root) { $root = [System.IO.Path]::GetTempPath() }
+    $probe = Join-Path $root ('.claude-setup-probe-' + [guid]::NewGuid().ToString('N'))
     $ok = $false
     try {
         New-Item -ItemType Directory -Path $probe | Out-Null
@@ -150,6 +156,14 @@ $prefix = ''
 if ($DryRun) { $prefix = '[DryRun] ' }
 $failed = 0
 
+# Guard: si TargetDir o sus carpetas de primer nivel son enlaces, los destinos resolverian dentro del repo.
+foreach ($g in @($TargetDir, (Join-Path $TargetDir 'skills'), (Join-Path $TargetDir 'agents'), (Join-Path $TargetDir 'hooks'))) {
+    if (Test-Reparse $g) {
+        Write-Host "ERROR: $g es un enlace (reparse point); abortado sin modificar nada."
+        exit 1
+    }
+}
+
 if ($Uninstall) {
     # Se valida antes de tocar nada: sin backups no se desinstala.
     $bkRoot = Join-Path $TargetDir 'backups'
@@ -211,7 +225,7 @@ if ($Uninstall) {
 
 $useLinks = $false
 if (-not $Copy) {
-    if (Test-CanSymlink) { $useLinks = $true }
+    if (Test-CanSymlink $TargetDir) { $useLinks = $true }
     else { Write-Host 'AVISO: no se pueden crear enlaces simbolicos (sin privilegios o CLAUDE_SETUP_NO_SYMLINK=1); se usa copia en esta ejecucion.' }
 }
 
@@ -234,6 +248,11 @@ foreach ($e in $entries) {
             # Un enlace no contiene datos: se quita sin tocar su destino.
             Write-Host "${prefix}Quitar enlace previo: $($e.Rel)"
             if (-not $DryRun) { Remove-Link $dst }
+        }
+        elseif ($useLinks -and (Test-SameAsRepo $e $src $dst)) {
+            # Copia real identica al repo (p.ej. de una ejecucion previa en modo copia): es contenido del repo, sin backup.
+            Write-Host "${prefix}Quitar copia identica: $($e.Rel)"
+            if (-not $DryRun) { Remove-Item -LiteralPath $dst -Recurse -Force }
         }
         elseif (Test-Path -LiteralPath $dst) {
             $bk = Join-Path (Get-BackupDir) $e.Rel
