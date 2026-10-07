@@ -1,0 +1,50 @@
+# Allowlist: se ignora todo salvo lo re-incluido explicitamente.
+*
+
+# Raiz
+!.gitignore
+!.gitattributes
+!.gitleaks.toml
+!.markdownlint.jsonc
+!PSScriptAnalyzerSettings.psd1
+!LICENSE
+!README.md
+!SECURITY.md
+!CHANGELOG.md
+!install.ps1
+
+# Scripts y tests
+!scripts/
+!scripts/*.ps1
+!tests/
+!tests/*.ps1
+
+# Hooks de git y CI
+!.githooks/
+!.githooks/*
+!.github/
+!.github/workflows/
+!.github/workflows/*.yml
+
+# Documentacion (incluye docs/superpowers/specs y plans)
+!docs/
+!docs/**/
+!docs/**/*.md
+
+# Plantillas y plugin
+!templates/
+!templates/*.md
+!plugin/
+!plugin/README.md
+
+# Configuracion de Claude (solo lo seguro)
+!claude/
+!claude/CLAUDE.md
+!claude/settings.json
+!claude/agents/
+!claude/agents/*.md
+!claude/hooks/
+!claude/hooks/*.ps1
+!claude/skills/
+!claude/skills/*/
+!claude/skills/*/SKILL.md
