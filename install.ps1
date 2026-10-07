@@ -174,6 +174,56 @@ function Get-BackupDir([string]$Kind = 'setup') {
     return $script:reservedDirs[$Kind]
 }
 
+$bkRoot = Join-Path $TargetDir 'backups'
+$manifestPath = Join-Path $bkRoot 'install-manifest.json'
+$setupPattern = '^setup-\d{8}-\d{6}(-\d+)?$'
+
+# Carpetas setup-* (candidatas a restaurar), de la mas antigua a la mas reciente (timestamp y luego -N).
+function Get-SetupBackups {
+    if (-not (Test-Path -LiteralPath $bkRoot -PathType Container)) { return @() }
+    $bks = @(Get-ChildItem -LiteralPath $bkRoot -Directory | Where-Object { $_.Name -match $setupPattern })
+    return @($bks | Sort-Object @{ Expression = { $_.Name.Substring(0, 21) } }, @{ Expression = { if ($_.Name.Length -gt 21) { [int]$_.Name.Substring(22) } else { 0 } } })
+}
+
+# Nombre de la carpeta setup-* mas antigua que contiene la entrada (o $null).
+function Get-OldestContaining([object[]]$Sorted, [string]$Rel) {
+    foreach ($b in $Sorted) {
+        $cand = Join-Path $b.FullName $Rel
+        if ((Test-Reparse $cand) -or (Test-Path -LiteralPath $cand)) { return $b.Name }
+    }
+    return $null
+}
+
+# Manifiesto del ciclo de instalacion actual: ruta gestionada -> carpeta setup-* con su original ($null si no existia).
+# Devuelve $null si no hay manifiesto; lanza si es invalido (entrada externa: se valida).
+function Read-Manifest {
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { return $null }
+    $m = [System.IO.File]::ReadAllText($manifestPath, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
+    if ($null -eq $m -or $m.version -ne 1) { throw "manifiesto con formato desconocido: $manifestPath" }
+    $valid = @{}
+    foreach ($e in $entries) { $valid[$e.Rel] = $true }
+    $records = @{}
+    foreach ($r in @($m.entries)) {
+        if ($null -eq $r) { continue }
+        $p = [string]$r.path
+        $b = $r.backup
+        if (-not $valid.ContainsKey($p)) { continue }
+        if ($null -ne $b -and ([string]$b -notmatch $setupPattern)) { throw "manifiesto: backup no valido para ${p}: $b" }
+        $records[$p] = $b
+    }
+    return $records
+}
+
+function Save-Manifest([hashtable]$Records) {
+    $list = @()
+    foreach ($k in @($Records.Keys | Sort-Object)) {
+        $list += [pscustomobject]@{ path = $k; backup = $Records[$k] }
+    }
+    $json = [pscustomobject]@{ version = 1; entries = $list } | ConvertTo-Json -Depth 4
+    New-Item -ItemType Directory -Force -Path $bkRoot | Out-Null
+    [System.IO.File]::WriteAllText($manifestPath, $json, (New-Object System.Text.UTF8Encoding($false)))
+}
+
 $prefix = ''
 if ($DryRun) { $prefix = '[DryRun] ' }
 $failed = 0
@@ -187,28 +237,58 @@ foreach ($g in @($TargetDir, (Join-Path $TargetDir 'skills'), (Join-Path $Target
 }
 
 if ($Uninstall) {
-    # Se valida antes de tocar nada: sin backups no se desinstala.
-    $bkRoot = Join-Path $TargetDir 'backups'
-    $bks = @()
-    if (Test-Path -LiteralPath $bkRoot -PathType Container) {
-        $bks = @(Get-ChildItem -LiteralPath $bkRoot -Directory | Where-Object { $_.Name -match '^setup-\d{8}-\d{6}(-\d+)?$' })
-    }
-    if ($bks.Count -eq 0) {
-        Write-Host "ERROR: no hay carpetas de backup en $bkRoot; no se puede desinstalar. No se borro nada."
+    # Se valida antes de tocar nada: sin backups setup-* no se desinstala.
+    $sorted = @(Get-SetupBackups)
+    if ($sorted.Count -eq 0) {
+        Write-Host "ERROR: no hay carpetas de backup setup-* en $bkRoot; no se puede desinstalar. No se borro nada."
         exit 1
     }
-    # Del mas antiguo al mas reciente: el primer backup que contiene una entrada guarda su estado previo a instalar.
-    $sorted = @($bks | Sort-Object @{ Expression = { $_.Name.Substring(0, 21) } }, @{ Expression = { if ($_.Name.Length -gt 21) { [int]$_.Name.Substring(22) } else { 0 } } })
-    Write-Host "${prefix}Restaurando cada entrada desde el backup mas antiguo que la contiene ($($sorted.Count) backups en $bkRoot)"
-    $restored = @{}
+    try { $records = Read-Manifest }
+    catch {
+        Write-Host "ERROR: $($_.Exception.Message). No se borro nada."
+        exit 1
+    }
+    if ($null -ne $records) {
+        Write-Host "${prefix}Restaurando el estado previo a la instalacion actual segun $manifestPath"
+    }
+    else {
+        # Instalacion de una version anterior sin manifiesto: backup setup-* mas antiguo que contiene cada entrada.
+        Write-Host "${prefix}Sin manifiesto: restaurando cada entrada desde el backup mas antiguo que la contiene ($($sorted.Count) backups en $bkRoot)"
+    }
+
+    # Plan por entrada y validacion previa: si falta algun backup necesario no se toca nada.
+    $plan = @()
     foreach ($e in $entries) {
+        $bk = $null
+        if ($null -ne $records) {
+            if (-not $records.ContainsKey($e.Rel)) {
+                Write-Host "${prefix}Omitir (no la instalo este instalador): $($e.Rel)"
+                continue
+            }
+            if ($records[$e.Rel]) {
+                $bk = Join-Path (Join-Path $bkRoot $records[$e.Rel]) $e.Rel
+                if (-not ((Test-Reparse $bk) -or (Test-Path -LiteralPath $bk))) {
+                    Write-Host "ERROR: $($e.Rel): falta su backup $bk"
+                    $failed++
+                }
+            }
+        }
+        else {
+            $name = Get-OldestContaining $sorted $e.Rel
+            if ($name) { $bk = Join-Path (Join-Path $bkRoot $name) $e.Rel }
+        }
+        $plan += [pscustomobject]@{ Entry = $e; Backup = $bk }
+    }
+    if ($failed -gt 0) {
+        Write-Host "ERROR: $failed backups necesarios no estan; no se borro nada."
+        exit 1
+    }
+
+    foreach ($p in $plan) {
+        $e = $p.Entry
+        $bk = $p.Backup
         $src = Join-Path $repoClaude $e.Rel
         $dst = Join-Path $TargetDir $e.Rel
-        $bk = $null
-        foreach ($b in $sorted) {
-            $cand = Join-Path $b.FullName $e.Rel
-            if ((Test-Reparse $cand) -or (Test-Path -LiteralPath $cand)) { $bk = $cand; break }
-        }
         try {
             if (Test-Reparse $dst) {
                 Write-Host "${prefix}Quitar enlace: $($e.Rel)"
@@ -228,7 +308,6 @@ if ($Uninstall) {
                 }
             }
             if ($bk) {
-                $restored[$e.Rel] = $true
                 Write-Host "${prefix}Restaurar: $($e.Rel) <- $bk"
                 if (-not $DryRun) {
                     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dst) | Out-Null
@@ -243,21 +322,42 @@ if ($Uninstall) {
         }
     }
     if (-not $DryRun) {
-        foreach ($e in $entries) {
-            $dst = Join-Path $TargetDir $e.Rel
+        foreach ($p in $plan) {
+            $dst = Join-Path $TargetDir $p.Entry.Rel
             $present = (Test-Path -LiteralPath $dst) -or (Test-Reparse $dst)
-            if ($present -ne [bool]$restored[$e.Rel]) {
-                Write-Host "ERROR: verificacion de desinstalacion fallida: $($e.Rel)"
+            if ($present -ne [bool]$p.Backup) {
+                Write-Host "ERROR: verificacion de desinstalacion fallida: $($p.Entry.Rel)"
                 $failed++
             }
         }
     }
     if ($DryRun) { Write-Host '[DryRun] Simulacion terminada, no se modifico nada.' }
     if ($failed -gt 0) {
-        Write-Host "ERROR: $failed entradas con problemas."
+        Write-Host "ERROR: $failed entradas con problemas. No se marco ningun backup como restaurado."
         exit 1
     }
-    if (-not $DryRun) { Write-Host 'Desinstalacion completada.' }
+    if (-not $DryRun) {
+        # Ciclo consumido: los backups setup-* pasan a restored-setup-* (nunca candidatos) y el manifiesto se archiva.
+        try {
+            foreach ($b in $sorted) {
+                Write-Host "Marcar como restaurado: $($b.Name) -> restored-$($b.Name)"
+                Rename-Item -LiteralPath $b.FullName -NewName ('restored-' + $b.Name)
+            }
+            if (Test-Path -LiteralPath $manifestPath -PathType Leaf) {
+                $arch = 'restored-install-manifest-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.json'
+                $i = 1
+                while (Test-Path -LiteralPath (Join-Path $bkRoot $arch)) {
+                    $arch = 'restored-install-manifest-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + "-$i.json"; $i++
+                }
+                Rename-Item -LiteralPath $manifestPath -NewName $arch
+            }
+        }
+        catch {
+            Write-Host "ERROR: no se pudieron marcar los backups como restaurados: $($_.Exception.Message)"
+            exit 1
+        }
+        Write-Host 'Desinstalacion completada.'
+    }
     exit 0
 }
 
@@ -272,13 +372,36 @@ if (-not (Test-Path -LiteralPath $TargetDir)) {
     if (-not $DryRun) { New-Item -ItemType Directory -Force -Path $TargetDir | Out-Null }
 }
 
+# Manifiesto del ciclo actual. Una entrada registrada la puso este instalador (reinstalar no crea backup nuevo);
+# una no registrada se adopta por primera vez y, si existe, se guarda en backup aunque sea identica al repo.
+try { $records = Read-Manifest }
+catch {
+    Write-Host "ERROR: $($_.Exception.Message). No se modifico nada."
+    exit 1
+}
+if ($null -eq $records) {
+    $records = @{}
+    # Instalacion previa sin manifiesto (version anterior): sus setup-* guardan los originales.
+    $legacy = @(Get-SetupBackups)
+    if ($legacy.Count -gt 0) {
+        foreach ($e in $entries) {
+            $name = Get-OldestContaining $legacy $e.Rel
+            if ($name) { $records[$e.Rel] = $name }
+        }
+    }
+}
+
 foreach ($e in $entries) {
     $src = Join-Path $repoClaude $e.Rel
     $dst = Join-Path $TargetDir $e.Rel
+    $owned = $records.ContainsKey($e.Rel)
+    $bkName = $null
     try {
         if ($useLinks) { $same = Test-LinkedToRepo $src $dst }
-        else { $same = Test-SameAsRepo $e $src $dst }
+        else { $same = (Test-SameAsRepo $e $src $dst) -and $owned }
         if ($same) {
+            # En modo enlace, un enlace al repo siempre lo puso el instalador (no contiene datos).
+            if (-not $owned) { $records[$e.Rel] = $null }
             Write-Host "${prefix}Sin cambios: $($e.Rel)"
             continue
         }
@@ -289,6 +412,7 @@ foreach ($e in $entries) {
         }
         elseif (Test-Reparse $dst) {
             # Enlace del usuario: se mueve el propio enlace al backup (mismo volumen), sin tocar su destino.
+            $bkName = Split-Path -Leaf (Get-BackupDir)
             $bk = Join-Path (Get-BackupDir) $e.Rel
             Write-Host "${prefix}Backup de enlace: $($e.Rel) -> $bk"
             if (-not $DryRun) {
@@ -296,12 +420,13 @@ foreach ($e in $entries) {
                 Move-Link $dst $bk
             }
         }
-        elseif ($useLinks -and (Test-SameAsRepo $e $src $dst)) {
-            # Copia real identica al repo (p.ej. de una ejecucion previa en modo copia): es contenido del repo, sin backup.
+        elseif ($useLinks -and $owned -and (Test-SameAsRepo $e $src $dst)) {
+            # Copia identica que puso este instalador (p.ej. una ejecucion previa en modo copia): sin backup.
             Write-Host "${prefix}Quitar copia identica: $($e.Rel)"
             if (-not $DryRun) { Remove-Item -LiteralPath $dst -Recurse -Force }
         }
         elseif (Test-Path -LiteralPath $dst) {
+            $bkName = Split-Path -Leaf (Get-BackupDir)
             $bk = Join-Path (Get-BackupDir) $e.Rel
             Write-Host "${prefix}Backup: $($e.Rel) -> $bk"
             if (-not $DryRun) {
@@ -309,6 +434,9 @@ foreach ($e in $entries) {
                 Move-Item -LiteralPath $dst -Destination $bk
             }
         }
+        # Primera adopcion: se registra donde quedo el original ($null si no existia). Si ya estaba
+        # registrada, el original del ciclo sigue en su carpeta y un backup nuevo solo guarda versiones posteriores.
+        if (-not $owned) { $records[$e.Rel] = $bkName }
         if ($useLinks) {
             Write-Host "${prefix}Enlazar: $($e.Rel)"
             if (-not $DryRun) {
@@ -326,6 +454,14 @@ foreach ($e in $entries) {
     }
     catch {
         Write-Host "ERROR: $($e.Rel): $($_.Exception.Message)"
+        $failed++
+    }
+}
+
+if (-not $DryRun) {
+    try { Save-Manifest $records }
+    catch {
+        Write-Host "ERROR: no se pudo escribir el manifiesto $($manifestPath): $($_.Exception.Message)"
         $failed++
     }
 }

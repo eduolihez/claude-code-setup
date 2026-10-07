@@ -205,16 +205,27 @@ Describe 'install.ps1 (modo copia)' {
         Get-FileHashValue (Join-Path $t 'skills\gstack\SKILL.md') | Should -Be $gst
     }
 
-    It 'no crea backups si las skills del destino ya son identicas al repo' {
+    It 'la primera adopcion de skills identicas al repo las guarda en backup y reinstalar no crea otro' {
         $t = Join-Path $TestDrive 'skillsame'
         New-Target $t
         $skillsDst = Join-Path $t 'skills'
-        foreach ($s in Get-ChildItem -LiteralPath (Join-Path $script:src 'skills') -Directory) {
+        $skills = @(Get-ChildItem -LiteralPath (Join-Path $script:src 'skills') -Directory)
+        $skills.Count | Should -BeGreaterThan 0
+        foreach ($s in $skills) {
             Copy-Item -LiteralPath $s.FullName -Destination (Join-Path $skillsDst $s.Name) -Recurse
         }
         $r = Invoke-Install $t
         $r.ExitCode | Should -Be 0 -Because $r.Stdout
-        Test-Path -LiteralPath (Join-Path $t 'backups') | Should -BeFalse
+        $dirs = @(Get-BackupDirs $t)
+        $dirs.Count | Should -Be 1
+        foreach ($s in $skills) {
+            Test-Path -LiteralPath (Join-Path $dirs[0].FullName "skills\$($s.Name)\SKILL.md") | Should -BeTrue -Because $s.Name
+        }
+        $tree = Get-TreeHash $t
+        $r2 = Invoke-Install $t
+        $r2.ExitCode | Should -Be 0 -Because $r2.Stdout
+        @(Get-BackupDirs $t).Count | Should -Be 1
+        Get-TreeHash $t | Should -Be $tree
     }
 }
 
@@ -283,13 +294,13 @@ Describe 'install.ps1 (enlaces, fallback y -Uninstall)' {
             $target = @($item.Target)[0]
             [System.IO.Path]::GetFullPath($target).TrimEnd('\') | Should -Be ([System.IO.Path]::GetFullPath((Join-Path $script:src $e)).TrimEnd('\')) -Because $e
         }
-        Test-Path -LiteralPath (Join-Path $t 'backups') | Should -BeFalse
+        @(Get-BackupDirs $t).Count | Should -Be 0
         $r2 = Invoke-Link $t
         $r2.ExitCode | Should -Be 0 -Because ($r2.Stdout + $r2.Stderr)
         $r2.Stdout | Should -Match 'Sin cambios'
         $r2.Stdout | Should -Not -Match 'Enlazar:'
         $r2.Stdout | Should -Not -Match 'Backup:'
-        Test-Path -LiteralPath (Join-Path $t 'backups') | Should -BeFalse
+        @(Get-BackupDirs $t).Count | Should -Be 0
     }
 
     It '-Uninstall tras instalar sobre un CLAUDE.md con marcador restaura el marcador, quita lo gestionado y no toca lo ajeno' {
@@ -366,7 +377,7 @@ Describe 'install.ps1 (enlaces, fallback y -Uninstall)' {
         New-Target $t
         $r0 = Invoke-Link $t @() @{ CLAUDE_SETUP_NO_SYMLINK = '1' }
         $r0.ExitCode | Should -Be 0 -Because ($r0.Stdout + $r0.Stderr)
-        Test-Path -LiteralPath (Join-Path $t 'backups') | Should -BeFalse
+        @(Get-BackupDirs $t).Count | Should -Be 0
         $before = Get-TreeHash $t
         $before.Length | Should -BeGreaterThan 0
         $u = Invoke-Link $t @('-Uninstall')
@@ -413,8 +424,9 @@ Describe 'install.ps1 (enlaces, fallback y -Uninstall)' {
         Get-FileHashValue (Join-Path $t 'settings.json') | Should -Be $origSettings
         Test-Path -LiteralPath (Join-Path $t "agents\$agent") | Should -BeFalse
         Test-Path -LiteralPath (Join-Path $t 'agents\mine.md') | Should -BeTrue
+        # Los backups se conservan, marcados como consumidos.
         foreach ($n in $setupDirs) {
-            Test-Path -LiteralPath (Join-Path $t "backups\$n") | Should -BeTrue -Because $n
+            Test-Path -LiteralPath (Join-Path $t "backups\restored-$n") | Should -BeTrue -Because $n
         }
     }
 
@@ -449,7 +461,7 @@ Describe 'install.ps1 (enlaces, fallback y -Uninstall)' {
         $u.ExitCode | Should -Be 0 -Because ($u.Stdout + $u.Stderr)
         $names = @(Get-BackupDirs $t | ForEach-Object { $_.Name })
         $names.Count | Should -Be 1
-        $names[0] | Should -Match '^setup-'
+        $names[0] | Should -Match '^restored-setup-'
     }
 
     It '-Uninstall -DryRun tras reinstalar con ediciones no cambia nada' {
@@ -493,9 +505,194 @@ Describe 'install.ps1 (enlaces, fallback y -Uninstall)' {
         $u.ExitCode | Should -Be 0 -Because ($u.Stdout + $u.Stderr)
         Test-IsReparse $link | Should -BeTrue
         [System.IO.Path]::GetFullPath(@((Get-Item -LiteralPath $link -Force).Target)[0]).TrimEnd('\') | Should -Be $store
-        Test-IsReparse $bkLink | Should -BeTrue
+        Test-IsReparse (Join-Path $t "backups\restored-$($dirs[0].Name)\skills\$skill") | Should -BeTrue
         Get-TreeHash $store | Should -Be $storeHash
         Get-Content -LiteralPath (Join-Path $link 'notas.txt') | Should -Be 'notas'
+    }
+
+    It '(a) un segundo ciclo instalar/desinstalar restaura el estado previo a ESE ciclo y marca restored-setup-*' {
+        $t = Join-Path $TestDrive 'cycle2'
+        New-Target $t
+        $claude = Join-Path $t 'CLAUDE.md'
+        Set-Content -LiteralPath $claude -Value 'VERSION-A'
+        $hashA = Get-FileHashValue $claude
+        (Invoke-Install $t).ExitCode | Should -Be 0
+        $first = @(Get-BackupDirs $t | Where-Object { $_.Name -like 'setup-*' } | ForEach-Object { $_.Name })
+        $first.Count | Should -Be 1
+        $u1 = Invoke-Link $t @('-Uninstall')
+        $u1.ExitCode | Should -Be 0 -Because ($u1.Stdout + $u1.Stderr)
+        Get-FileHashValue $claude | Should -Be $hashA
+        Test-Path -LiteralPath (Join-Path $t "backups\restored-$($first[0])") | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $t "backups\$($first[0])") | Should -BeFalse
+        Set-Content -LiteralPath $claude -Value 'VERSION-B'
+        $hashB = Get-FileHashValue $claude
+        (Invoke-Install $t).ExitCode | Should -Be 0
+        $u2 = Invoke-Link $t @('-Uninstall')
+        $u2.ExitCode | Should -Be 0 -Because ($u2.Stdout + $u2.Stderr)
+        Get-FileHashValue $claude | Should -Be $hashB
+        @(Get-BackupDirs $t | Where-Object { $_.Name -match '^setup-' }).Count | Should -Be 0
+        @(Get-BackupDirs $t | Where-Object { $_.Name -match '^restored-setup-' }).Count | Should -Be 2
+    }
+
+    It '(b) entradas del usuario identicas al repo se guardan al instalar y -Uninstall las restaura' {
+        $t = Join-Path $TestDrive 'identical'
+        New-Target $t
+        $agents = @(Get-ChildItem -LiteralPath (Join-Path $script:src 'agents') -File)
+        $agents.Count | Should -BeGreaterThan 1
+        $mineAgent = "agents\$($agents[0].Name)"
+        $otherAgent = "agents\$($agents[1].Name)"
+        $skill = 'skills\' + @(Get-ChildItem -LiteralPath (Join-Path $script:src 'skills') -Directory)[0].Name
+        Copy-Item -LiteralPath (Join-Path $script:src 'CLAUDE.md') -Destination (Join-Path $t 'CLAUDE.md')
+        Copy-Item -LiteralPath (Join-Path $script:src $mineAgent) -Destination (Join-Path $t $mineAgent)
+        Copy-Item -LiteralPath (Join-Path $script:src $skill) -Destination (Join-Path $t $skill) -Recurse
+        $own = @('CLAUDE.md', $mineAgent, "$skill\SKILL.md")
+        $orig = @{}
+        foreach ($o in $own) { $orig[$o] = Get-FileHashValue (Join-Path $t $o) }
+        $r = Invoke-Install $t
+        $r.ExitCode | Should -Be 0 -Because $r.Stdout
+        foreach ($o in $own) { Get-FileHashValue (Join-Path $t $o) | Should -Be $orig[$o] -Because $o }
+        $dirs = @(Get-BackupDirs $t)
+        $dirs.Count | Should -Be 1
+        foreach ($o in $own) {
+            Get-FileHashValue (Join-Path $dirs[0].FullName $o) | Should -Be $orig[$o] -Because "backup de $o"
+        }
+        $u = Invoke-Link $t @('-Uninstall')
+        $u.ExitCode | Should -Be 0 -Because ($u.Stdout + $u.Stderr)
+        foreach ($o in $own) {
+            Test-Path -LiteralPath (Join-Path $t $o) | Should -BeTrue -Because $o
+            Get-FileHashValue (Join-Path $t $o) | Should -Be $orig[$o] -Because $o
+        }
+        Test-Path -LiteralPath (Join-Path $t $otherAgent) | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $t 'agents\mine.md') | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $t 'skills\gstack\SKILL.md') | Should -BeTrue
+    }
+
+    It '(c) reinstalar lo ya instalado no crea backup ni cambia el manifiesto' {
+        $t = Join-Path $TestDrive 'idem-manifest'
+        New-Target $t
+        Copy-Item -LiteralPath (Join-Path $script:src 'CLAUDE.md') -Destination (Join-Path $t 'CLAUDE.md')
+        (Invoke-Install $t).ExitCode | Should -Be 0
+        $dirs = @(Get-BackupDirs $t | ForEach-Object { $_.Name })
+        $dirs.Count | Should -Be 1
+        $mf = Join-Path $t 'backups\install-manifest.json'
+        Test-Path -LiteralPath $mf | Should -BeTrue
+        $m = Get-Content -Raw -LiteralPath $mf | ConvertFrom-Json
+        $rec = @($m.entries | Where-Object { $_.path -eq 'CLAUDE.md' })
+        $rec.Count | Should -Be 1
+        $rec[0].backup | Should -Be $dirs[0]
+        $agentRec = @($m.entries | Where-Object { $_.path -like 'agents\*' })
+        $agentRec.Count | Should -BeGreaterThan 0
+        foreach ($a in $agentRec) { $a.backup | Should -BeNullOrEmpty -Because $a.path }
+        $mfHash = Get-FileHashValue $mf
+        $tree = Get-TreeHash $t
+        $r = Invoke-Install $t
+        $r.ExitCode | Should -Be 0 -Because $r.Stdout
+        $r.Stdout | Should -Not -Match 'Backup'
+        @(Get-BackupDirs $t | ForEach-Object { $_.Name }) | Should -Be $dirs
+        Get-FileHashValue $mf | Should -Be $mfHash
+        Get-TreeHash $t | Should -Be $tree
+    }
+
+    It '(d) un segundo -Uninstall sale con 1 y no toca nada' {
+        $t = Join-Path $TestDrive 'uninst-twice'
+        New-Target $t
+        Set-Content -LiteralPath (Join-Path $t 'CLAUDE.md') -Value 'ORIGINAL'
+        (Invoke-Install $t).ExitCode | Should -Be 0
+        $u1 = Invoke-Link $t @('-Uninstall')
+        $u1.ExitCode | Should -Be 0 -Because ($u1.Stdout + $u1.Stderr)
+        $before = Get-TreeHash $t
+        $before.Length | Should -BeGreaterThan 0
+        $dirsBefore = @(Get-BackupDirs $t | ForEach-Object { $_.Name })
+        $dirsBefore.Count | Should -BeGreaterThan 0
+        $u2 = Invoke-Link $t @('-Uninstall')
+        $u2.ExitCode | Should -Be 1
+        $u2.Stdout | Should -Match 'backup'
+        Get-TreeHash $t | Should -Be $before
+        @(Get-BackupDirs $t | ForEach-Object { $_.Name }) | Should -Be $dirsBefore
+    }
+
+    It '(e) -Uninstall -DryRun tras instalar no renombra backups ni cambia el manifiesto' {
+        $t = Join-Path $TestDrive 'uninst-dry3'
+        New-Target $t
+        Set-Content -LiteralPath (Join-Path $t 'CLAUDE.md') -Value 'ORIGINAL'
+        (Invoke-Install $t).ExitCode | Should -Be 0
+        $mf = Join-Path $t 'backups\install-manifest.json'
+        Test-Path -LiteralPath $mf | Should -BeTrue
+        $mfHash = Get-FileHashValue $mf
+        $before = Get-TreeHash $t
+        $dirsBefore = @(Get-BackupDirs $t | ForEach-Object { $_.Name })
+        $dirsBefore.Count | Should -Be 1
+        $u = Invoke-Link $t @('-Uninstall', '-DryRun')
+        $u.ExitCode | Should -Be 0 -Because ($u.Stdout + $u.Stderr)
+        Get-TreeHash $t | Should -Be $before
+        Get-FileHashValue $mf | Should -Be $mfHash
+        @(Get-BackupDirs $t | ForEach-Object { $_.Name }) | Should -Be $dirsBefore
+        @(Get-BackupDirs $t | Where-Object { $_.Name -like 'restored-*' }).Count | Should -Be 0
+    }
+
+    It '(f) una instalacion de la version anterior (setup-* sin manifiesto) se desinstala con el backup mas antiguo' {
+        $t = Join-Path $TestDrive 'legacy'
+        New-Target $t
+        Set-Content -LiteralPath (Join-Path $t 'CLAUDE.md') -Value 'ORIGINAL-LEGACY'
+        $hash = Get-FileHashValue (Join-Path $t 'CLAUDE.md')
+        $agent = 'agents\' + @(Get-ChildItem -LiteralPath (Join-Path $script:src 'agents') -File)[0].Name
+        (Invoke-Install $t).ExitCode | Should -Be 0
+        Remove-Item -LiteralPath (Join-Path $t 'backups\install-manifest.json')
+        Test-Path -LiteralPath (Join-Path $t $agent) | Should -BeTrue
+        $u = Invoke-Link $t @('-Uninstall')
+        $u.ExitCode | Should -Be 0 -Because ($u.Stdout + $u.Stderr)
+        Get-FileHashValue (Join-Path $t 'CLAUDE.md') | Should -Be $hash
+        Test-Path -LiteralPath (Join-Path $t $agent) | Should -BeFalse
+        @(Get-BackupDirs $t | Where-Object { $_.Name -match '^restored-setup-' }).Count | Should -Be 1
+    }
+
+    It '(g) si falta el backup de una entrada, -Uninstall sale con 1 sin tocar nada ni marcar backups' {
+        $t = Join-Path $TestDrive 'uninst-fail'
+        New-Target $t
+        Set-Content -LiteralPath (Join-Path $t 'CLAUDE.md') -Value 'ORIGINAL-CLAUDE'
+        Set-Content -LiteralPath (Join-Path $t 'settings.json') -Value '{"original":true}'
+        (Invoke-Install $t).ExitCode | Should -Be 0
+        Add-Content -LiteralPath (Join-Path $t 'CLAUDE.md') -Value 'edicion del usuario'
+        $dirs = @(Get-BackupDirs $t)
+        $dirs.Count | Should -Be 1
+        Remove-Item -LiteralPath (Join-Path $dirs[0].FullName 'settings.json')
+        $before = Get-TreeHash $t
+        $before.Length | Should -BeGreaterThan 0
+        $u = Invoke-Link $t @('-Uninstall')
+        $u.ExitCode | Should -Be 1
+        $u.Stdout | Should -Match 'ERROR: settings\.json'
+        Get-TreeHash $t | Should -Be $before
+        @(Get-BackupDirs $t | Where-Object { $_.Name -like 'restored-*' }).Count | Should -Be 0
+        Test-Path -LiteralPath (Join-Path $t 'backups\install-manifest.json') | Should -BeTrue
+    }
+
+    It 'una junction rota del usuario se guarda al instalar y -Uninstall la recrea o informa sin perder datos' {
+        $t = Join-Path $TestDrive 'broken-junction'
+        New-Target $t
+        $skill = @(Get-ChildItem -LiteralPath (Join-Path $script:src 'skills') -Directory)[0].Name
+        $gone = Join-Path $TestDrive 'broken-junction-gone'
+        New-Item -ItemType Directory -Force -Path $gone | Out-Null
+        $link = Join-Path $t "skills\$skill"
+        New-Item -ItemType Junction -Path $link -Value $gone | Out-Null
+        Remove-Item -LiteralPath $gone -Recurse -Force
+        Test-IsReparse $link | Should -BeTrue
+        Set-Content -LiteralPath (Join-Path $t 'CLAUDE.md') -Value 'ORIGINAL'
+        $r = Invoke-Install $t
+        $r.ExitCode | Should -Be 0 -Because $r.Stdout
+        $dirs = @(Get-BackupDirs $t)
+        $dirs.Count | Should -Be 1
+        $bkLink = Join-Path $dirs[0].FullName "skills\$skill"
+        Test-IsReparse $bkLink | Should -BeTrue
+        $u = Invoke-Link $t @('-Uninstall')
+        if ($u.ExitCode -eq 0) {
+            Test-IsReparse $link | Should -BeTrue
+            [System.IO.Path]::GetFullPath(@((Get-Item -LiteralPath $link -Force).Target)[0]).TrimEnd('\') | Should -Be $gone
+        }
+        else {
+            $u.Stdout | Should -Match ([regex]::Escape("ERROR: skills\$skill"))
+            Test-IsReparse $bkLink | Should -BeTrue
+        }
+        Get-Content -LiteralPath (Join-Path $t 'CLAUDE.md') | Should -Be 'ORIGINAL'
     }
 
     It 'modo enlace sobre copias identicas del repo las quita sin crear backup nuevo (seam sin symlinks)' {
