@@ -70,9 +70,9 @@ claude-code-setup/
 
 - Gestiona solo una lista fija de rutas: `CLAUDE.md`, `settings.json`, `agents/`, `hooks/` y las skills propias. Nunca toca `.credentials.json`, `projects/`, `sessions/` ni `history.jsonl`.
 - Modo por defecto: symlinks. Si Windows no permite crearlos (sin modo desarrollador ni admin), usa copia y avisa.
-- Antes de modificar nada, mueve lo existente a `~/.claude/backups/setup-YYYYMMDD-HHMMSS/`.
+- Antes de modificar nada, mueve lo existente a `~/.claude/backups/setup-YYYYMMDD-HHMMSS/`, también lo que ya es idéntico al repo la primera vez que lo adopta. `~/.claude/backups/install-manifest.json` registra, por ruta gestionada, qué carpeta `setup-*` guarda su original (o `null` si no existía); reinstalar lo ya registrado no crea backups.
 - Flags: `-DryRun`, `-Copy`, `-Uninstall`.
-- `-Uninstall` devuelve cada ruta gestionada a su estado previo a instalar: la restaura desde el backup `setup-*` más antiguo que la contiene, o la quita si no está en ninguno. Antes, lo instalado que difiere del repo (por ejemplo, memoria `#` añadida a `CLAUDE.md`) se mueve a `~/.claude/backups/pre-uninstall-YYYYMMDD-HHMMSS/`. Los backups se conservan.
+- `-Uninstall` devuelve cada ruta gestionada a su estado previo a la instalación actual: la restaura desde la carpeta que indica el manifiesto, o la quita si no existía. Antes, lo instalado que difiere del repo (por ejemplo, memoria `#` añadida a `CLAUDE.md`) se mueve a `~/.claude/backups/pre-uninstall-YYYYMMDD-HHMMSS/`. Si falta algún backup necesario, no toca nada y termina con error. Al terminar bien, los `setup-*` pasan a `restored-setup-*` (se conservan pero ya no son candidatos) y el manifiesto se archiva; un segundo `-Uninstall` no encuentra backups y termina con error sin tocar nada. Sin manifiesto (instalación de una versión anterior) usa el backup `setup-*` más antiguo que contiene cada ruta.
 - Un enlace previo del usuario en una ruta gestionada se mueve tal cual al backup y `-Uninstall` lo recrea.
 - Las rutas de hooks en `settings.json` usan `%USERPROFILE%`.
 - Al terminar, verifica cada destino e imprime el resultado. Termina con código distinto de cero si algo falla.

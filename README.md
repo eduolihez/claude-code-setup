@@ -21,9 +21,11 @@ Parámetros de `install.ps1` (todos se pasan igual: `powershell -NoProfile -Exec
 - `-TargetDir`: carpeta de destino. Por defecto `%USERPROFILE%\.claude`.
 - `-Copy`: copia los archivos en lugar de enlazarlos.
 - `-DryRun`: simula la operación e imprime los pasos.
-- `-Uninstall`: deja cada archivo gestionado como estaba antes de instalar. Lo restaura desde el backup más antiguo que lo contiene, o lo quita si no existía. Lo que hayas editado desde la última instalación se guarda antes en `backups\pre-uninstall-<fecha>`. Los backups no se borran. Si no hay ningún backup, aborta sin borrar nada.
+- `-Uninstall`: deja cada archivo gestionado como estaba antes de la instalación actual. Restaura tus originales, también los que ya eran idénticos al repo, y quita lo que no existía. Lo que hayas editado desde entonces se guarda antes en `backups\pre-uninstall-<fecha>`. Los backups usados no se borran: pasan a llamarse `restored-setup-<fecha>`. Si no queda ningún backup `setup-*` (por ejemplo, al repetir `-Uninstall`), aborta sin tocar nada.
 
-Por defecto el instalador crea enlaces simbólicos, así que editar el repo cambia la configuración activa. En Windows eso exige modo desarrollador o una consola de administrador. Sin ese permiso, el instalador avisa y copia los archivos. Lo que ya existía en el destino se guarda antes en `backups\setup-<fecha>` dentro de `TargetDir`.
+Por defecto el instalador crea enlaces simbólicos, así que editar el repo cambia la configuración activa. En Windows eso exige modo desarrollador o una consola de administrador. Sin ese permiso, el instalador avisa y copia los archivos. Lo que ya existía en el destino se guarda antes en `backups\setup-<fecha>` dentro de `TargetDir`, aunque sea idéntico al repo. El instalador anota en `backups\install-manifest.json` qué puso y dónde quedó cada original.
+
+Los backups pueden contener enlaces o junctions. Para borrar una carpeta de backup usa `cmd /c rmdir /s /q <ruta>` o el Explorador, no `Remove-Item -Recurse` de PowerShell 5.1, o quita antes los enlaces.
 
 El instalador solo gestiona `CLAUDE.md`, `settings.json`, `agents/`, `hooks/` y las carpetas de `skills/` que están en este repo. No toca credenciales, historial, sesiones ni otras skills que ya tengas.
 
@@ -34,7 +36,7 @@ git pull
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-Volver a ejecutar el instalador enlaza o copia lo nuevo del repo. En modo copia, si una copia instalada difiere de la nueva versión, va antes a `backups\setup-<fecha>`.
+Volver a ejecutar el instalador enlaza o copia lo nuevo del repo, sin crear backups de lo que ya puso él. En modo copia, si una copia instalada difiere de la nueva versión, va antes a `backups\setup-<fecha>`; `-Uninstall` sigue restaurando los originales de antes de instalar.
 
 ### Notas
 
