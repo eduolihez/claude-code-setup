@@ -7,7 +7,8 @@ Describe 'gitignore allowlist' {
     It 'ignora <_>' -ForEach @(
         'claude/.credentials.json', 'claude/settings.local.json', 'claude/history.jsonl',
         'claude/projects/p/a.jsonl', 'claude/sessions/s.json', 'claude/backups/b',
-        'claude/hooks/token.txt', '.env'
+        'claude/hooks/token.txt', '.env', '.superpowers/x',
+        'docs/x.txt', 'scripts/x.psm1', 'claude/agents/x.json'
     ) {
         Test-GitIgnored -RepoRoot $script:Root -Path $_ | Should -BeTrue
     }
