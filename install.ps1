@@ -127,10 +127,32 @@ function Test-SameAsRepo($Entry, [string]$Src, [string]$Dst) {
     return $true
 }
 
-$script:backupDir = $null
-function Get-BackupDir {
-    if ($null -eq $script:backupDir) {
-        $base = Join-Path $TargetDir ('backups\setup-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+# Mueve un enlace (el propio reparse point, no su destino). Solo dentro del mismo volumen:
+# [IO.Directory]::Move / [IO.File]::Move renombran y fallan entre volumenes en vez de copiar contenido.
+function Move-Link([string]$Path, [string]$Destination) {
+    if (([System.IO.File]::GetAttributes($Path) -band [System.IO.FileAttributes]::Directory) -ne 0) {
+        [System.IO.Directory]::Move($Path, $Destination)
+    }
+    else {
+        [System.IO.File]::Move($Path, $Destination)
+    }
+}
+
+# Recrea en $Dst un enlace equivalente al enlace $Link (junction o symlink), sin tocar $Link.
+function Copy-Link([string]$Link, [string]$Dst) {
+    $item = Get-Item -LiteralPath $Link -Force
+    $t = @($item.Target)
+    if ($t.Count -eq 0 -or -not $t[0]) { throw "no se puede leer el destino del enlace $Link" }
+    $type = 'SymbolicLink'
+    if ($item.LinkType -eq 'Junction') { $type = 'Junction' }
+    New-Item -ItemType $type -Path $Dst -Value ([string]$t[0]) -ErrorAction Stop | Out-Null
+}
+
+# Carpetas de backup reservadas en esta ejecucion, por tipo ('setup' o 'pre-uninstall').
+$script:reservedDirs = @{}
+function Get-BackupDir([string]$Kind = 'setup') {
+    if (-not $script:reservedDirs.ContainsKey($Kind)) {
+        $base = Join-Path $TargetDir ("backups\$Kind-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
         $cand = $base
         $i = 1
         if ($DryRun) {
@@ -147,9 +169,9 @@ function Get-BackupDir {
                 }
             }
         }
-        $script:backupDir = $cand
+        $script:reservedDirs[$Kind] = $cand
     }
-    return $script:backupDir
+    return $script:reservedDirs[$Kind]
 }
 
 $prefix = ''
@@ -175,27 +197,43 @@ if ($Uninstall) {
         Write-Host "ERROR: no hay carpetas de backup en $bkRoot; no se puede desinstalar. No se borro nada."
         exit 1
     }
-    $latest = $bks | Sort-Object @{ Expression = { $_.Name.Substring(0, 21) } }, @{ Expression = { if ($_.Name.Length -gt 21) { [int]$_.Name.Substring(22) } else { 0 } } } | Select-Object -Last 1
-    Write-Host "${prefix}Restaurando desde el backup mas reciente: $($latest.FullName)"
+    # Del mas antiguo al mas reciente: el primer backup que contiene una entrada guarda su estado previo a instalar.
+    $sorted = @($bks | Sort-Object @{ Expression = { $_.Name.Substring(0, 21) } }, @{ Expression = { if ($_.Name.Length -gt 21) { [int]$_.Name.Substring(22) } else { 0 } } })
+    Write-Host "${prefix}Restaurando cada entrada desde el backup mas antiguo que la contiene ($($sorted.Count) backups en $bkRoot)"
     $restored = @{}
     foreach ($e in $entries) {
+        $src = Join-Path $repoClaude $e.Rel
         $dst = Join-Path $TargetDir $e.Rel
-        $bk = Join-Path $latest.FullName $e.Rel
+        $bk = $null
+        foreach ($b in $sorted) {
+            $cand = Join-Path $b.FullName $e.Rel
+            if ((Test-Reparse $cand) -or (Test-Path -LiteralPath $cand)) { $bk = $cand; break }
+        }
         try {
             if (Test-Reparse $dst) {
                 Write-Host "${prefix}Quitar enlace: $($e.Rel)"
                 if (-not $DryRun) { Remove-Link $dst }
             }
-            elseif (Test-Path -LiteralPath $dst) {
+            elseif (Test-SameAsRepo $e $src $dst) {
                 Write-Host "${prefix}Quitar: $($e.Rel)"
                 if (-not $DryRun) { Remove-Item -LiteralPath $dst -Recurse -Force }
             }
-            if (Test-Path -LiteralPath $bk) {
+            elseif (Test-Path -LiteralPath $dst) {
+                # Difiere del repo (p.ej. memoria # en CLAUDE.md): se guarda, nunca se pierde.
+                $keep = Join-Path (Get-BackupDir 'pre-uninstall') $e.Rel
+                Write-Host "${prefix}Guardar cambios: $($e.Rel) -> $keep"
+                if (-not $DryRun) {
+                    New-Item -ItemType Directory -Force -Path (Split-Path -Parent $keep) | Out-Null
+                    Move-Item -LiteralPath $dst -Destination $keep
+                }
+            }
+            if ($bk) {
                 $restored[$e.Rel] = $true
-                Write-Host "${prefix}Restaurar: $($e.Rel)"
+                Write-Host "${prefix}Restaurar: $($e.Rel) <- $bk"
                 if (-not $DryRun) {
                     New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dst) | Out-Null
-                    Copy-Item -LiteralPath $bk -Destination $dst -Recurse -Force
+                    if (Test-Reparse $bk) { Copy-Link $bk $dst }
+                    else { Copy-Item -LiteralPath $bk -Destination $dst -Recurse -Force }
                 }
             }
         }
@@ -244,10 +282,19 @@ foreach ($e in $entries) {
             Write-Host "${prefix}Sin cambios: $($e.Rel)"
             continue
         }
-        if (Test-Reparse $dst) {
-            # Un enlace no contiene datos: se quita sin tocar su destino.
+        if ((Test-Reparse $dst) -and (Test-LinkedToRepo $src $dst)) {
+            # Enlace al repo de una instalacion previa: no es del usuario, se quita sin backup.
             Write-Host "${prefix}Quitar enlace previo: $($e.Rel)"
             if (-not $DryRun) { Remove-Link $dst }
+        }
+        elseif (Test-Reparse $dst) {
+            # Enlace del usuario: se mueve el propio enlace al backup (mismo volumen), sin tocar su destino.
+            $bk = Join-Path (Get-BackupDir) $e.Rel
+            Write-Host "${prefix}Backup de enlace: $($e.Rel) -> $bk"
+            if (-not $DryRun) {
+                New-Item -ItemType Directory -Force -Path (Split-Path -Parent $bk) | Out-Null
+                Move-Link $dst $bk
+            }
         }
         elseif ($useLinks -and (Test-SameAsRepo $e $src $dst)) {
             # Copia real identica al repo (p.ej. de una ejecucion previa en modo copia): es contenido del repo, sin backup.

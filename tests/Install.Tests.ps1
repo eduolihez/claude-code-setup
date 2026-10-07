@@ -388,6 +388,116 @@ Describe 'install.ps1 (enlaces, fallback y -Uninstall)' {
         Get-TreeHash $t | Should -Be $before
     }
 
+    It '-Uninstall tras reinstalar sobre copias editadas restaura los ORIGINALES (backup mas antiguo) y conserva los backups' {
+        $t = Join-Path $TestDrive 'uninst-reinstall'
+        New-Target $t
+        Set-Content -LiteralPath (Join-Path $t 'CLAUDE.md') -Value 'ORIGINAL-CLAUDE'
+        Set-Content -LiteralPath (Join-Path $t 'settings.json') -Value '{"original":true}'
+        $origClaude = Get-FileHashValue (Join-Path $t 'CLAUDE.md')
+        $origSettings = Get-FileHashValue (Join-Path $t 'settings.json')
+        $agent = @(Get-ChildItem -LiteralPath (Join-Path $script:src 'agents') -File)[0].Name
+        $agent | Should -Not -BeNullOrEmpty
+        Test-Path -LiteralPath (Join-Path $t "agents\$agent") | Should -BeFalse
+        $r1 = Invoke-Install $t
+        $r1.ExitCode | Should -Be 0 -Because $r1.Stdout
+        # Simula una actualizacion del repo: las copias instaladas cambian y se reinstala.
+        Add-Content -LiteralPath (Join-Path $t 'CLAUDE.md') -Value 'version antigua del repo'
+        Add-Content -LiteralPath (Join-Path $t 'settings.json') -Value ' '
+        $r2 = Invoke-Install $t
+        $r2.ExitCode | Should -Be 0 -Because $r2.Stdout
+        $setupDirs = @(Get-BackupDirs $t | Where-Object { $_.Name -like 'setup-*' } | ForEach-Object { $_.Name })
+        $setupDirs.Count | Should -Be 2
+        $u = Invoke-Link $t @('-Uninstall')
+        $u.ExitCode | Should -Be 0 -Because ($u.Stdout + $u.Stderr)
+        Get-FileHashValue (Join-Path $t 'CLAUDE.md') | Should -Be $origClaude
+        Get-FileHashValue (Join-Path $t 'settings.json') | Should -Be $origSettings
+        Test-Path -LiteralPath (Join-Path $t "agents\$agent") | Should -BeFalse
+        Test-Path -LiteralPath (Join-Path $t 'agents\mine.md') | Should -BeTrue
+        foreach ($n in $setupDirs) {
+            Test-Path -LiteralPath (Join-Path $t "backups\$n") | Should -BeTrue -Because $n
+        }
+    }
+
+    It '-Uninstall guarda en backups\pre-uninstall-* lo editado tras instalar y no guarda lo identico al repo' {
+        $t = Join-Path $TestDrive 'uninst-pre'
+        New-Target $t
+        Set-Content -LiteralPath (Join-Path $t 'CLAUDE.md') -Value 'ORIGINAL-CLAUDE'
+        $origClaude = Get-FileHashValue (Join-Path $t 'CLAUDE.md')
+        $r = Invoke-Install $t
+        $r.ExitCode | Should -Be 0 -Because $r.Stdout
+        Add-Content -LiteralPath (Join-Path $t 'CLAUDE.md') -Value 'memoria # del usuario'
+        $editHash = Get-FileHashValue (Join-Path $t 'CLAUDE.md')
+        $u = Invoke-Link $t @('-Uninstall')
+        $u.ExitCode | Should -Be 0 -Because ($u.Stdout + $u.Stderr)
+        Get-FileHashValue (Join-Path $t 'CLAUDE.md') | Should -Be $origClaude
+        $pre = @(Get-BackupDirs $t | Where-Object { $_.Name -match '^pre-uninstall-\d{8}-\d{6}(-\d+)?$' })
+        $pre.Count | Should -Be 1
+        $saved = Join-Path $pre[0].FullName 'CLAUDE.md'
+        Test-Path -LiteralPath $saved | Should -BeTrue
+        Get-FileHashValue $saved | Should -Be $editHash
+        Test-Path -LiteralPath (Join-Path $pre[0].FullName 'settings.json') | Should -BeFalse
+        $savedFiles = @(Get-ChildItem -LiteralPath $pre[0].FullName -Recurse -File)
+        $savedFiles.Count | Should -Be 1
+    }
+
+    It '-Uninstall sin ediciones posteriores no crea carpeta pre-uninstall' {
+        $t = Join-Path $TestDrive 'uninst-nopre'
+        New-Target $t
+        Set-Content -LiteralPath (Join-Path $t 'CLAUDE.md') -Value 'ORIGINAL-CLAUDE'
+        (Invoke-Install $t).ExitCode | Should -Be 0
+        $u = Invoke-Link $t @('-Uninstall')
+        $u.ExitCode | Should -Be 0 -Because ($u.Stdout + $u.Stderr)
+        $names = @(Get-BackupDirs $t | ForEach-Object { $_.Name })
+        $names.Count | Should -Be 1
+        $names[0] | Should -Match '^setup-'
+    }
+
+    It '-Uninstall -DryRun tras reinstalar con ediciones no cambia nada' {
+        $t = Join-Path $TestDrive 'uninst-dry2'
+        New-Target $t
+        Set-Content -LiteralPath (Join-Path $t 'CLAUDE.md') -Value 'ORIGINAL-CLAUDE'
+        (Invoke-Install $t).ExitCode | Should -Be 0
+        Add-Content -LiteralPath (Join-Path $t 'CLAUDE.md') -Value 'version antigua del repo'
+        (Invoke-Install $t).ExitCode | Should -Be 0
+        Add-Content -LiteralPath (Join-Path $t 'CLAUDE.md') -Value 'edicion del usuario'
+        $before = Get-TreeHash $t
+        $before.Length | Should -BeGreaterThan 0
+        $u = Invoke-Link $t @('-Uninstall', '-DryRun')
+        $u.ExitCode | Should -Be 0 -Because ($u.Stdout + $u.Stderr)
+        $u.Stdout | Should -Match '\[DryRun\].*pre-uninstall'
+        Get-TreeHash $t | Should -Be $before
+        @(Get-BackupDirs $t | Where-Object { $_.Name -like 'pre-uninstall-*' }).Count | Should -Be 0
+    }
+
+    It 'instalar sobre una junction del usuario la guarda como enlace en el backup y -Uninstall la recrea sin tocar su contenido' {
+        $t = Join-Path $TestDrive 'user-junction'
+        New-Target $t
+        $skill = @(Get-ChildItem -LiteralPath (Join-Path $script:src 'skills') -Directory)[0].Name
+        $store = Join-Path $TestDrive 'user-junction-store'
+        New-Item -ItemType Directory -Force -Path $store | Out-Null
+        Set-Content -LiteralPath (Join-Path $store 'SKILL.md') -Value 'skill propia del usuario'
+        Set-Content -LiteralPath (Join-Path $store 'notas.txt') -Value 'notas'
+        $storeHash = Get-TreeHash $store
+        $link = Join-Path $t "skills\$skill"
+        New-Item -ItemType Junction -Path $link -Value $store | Out-Null
+        $r = Invoke-Install $t
+        $r.ExitCode | Should -Be 0 -Because $r.Stdout
+        Test-IsReparse $link | Should -BeFalse
+        $dirs = @(Get-BackupDirs $t)
+        $dirs.Count | Should -Be 1
+        $bkLink = Join-Path $dirs[0].FullName "skills\$skill"
+        Test-IsReparse $bkLink | Should -BeTrue
+        [System.IO.Path]::GetFullPath(@((Get-Item -LiteralPath $bkLink -Force).Target)[0]).TrimEnd('\') | Should -Be $store
+        Get-TreeHash $store | Should -Be $storeHash
+        $u = Invoke-Link $t @('-Uninstall')
+        $u.ExitCode | Should -Be 0 -Because ($u.Stdout + $u.Stderr)
+        Test-IsReparse $link | Should -BeTrue
+        [System.IO.Path]::GetFullPath(@((Get-Item -LiteralPath $link -Force).Target)[0]).TrimEnd('\') | Should -Be $store
+        Test-IsReparse $bkLink | Should -BeTrue
+        Get-TreeHash $store | Should -Be $storeHash
+        Get-Content -LiteralPath (Join-Path $link 'notas.txt') | Should -Be 'notas'
+    }
+
     It 'modo enlace sobre copias identicas del repo las quita sin crear backup nuevo (seam sin symlinks)' {
         $t = Join-Path $TestDrive 'seam'
         New-Target $t
