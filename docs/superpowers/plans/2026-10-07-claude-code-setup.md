@@ -247,7 +247,7 @@
   - `powershell -NoProfile -ExecutionPolicy Bypass -File tests/Invoke-Tests.ps1`: 0 fallos.
   - `Invoke-ScriptAnalyzer ...` y `npx markdownlint-cli2 "**/*.md" "#docs/superpowers" "#.superpowers" "#node_modules"`: sin hallazgos.
   - `docker run --rm -v "<ruta-local>:/repo" zricethezav/gitleaks:latest detect --source /repo --log-opts="--all" -v`: `no leaks found`.
-  - `git ls-files` comparado con la allowlist, y `git grep -n -I -P "(?i)<usuario>(?!ihez)|C:\x5c+Users"` sin salida, sustituyendo `<usuario>` por el nombre de usuario local (la barra invertida va como `\x5c` para que el comando funcione igual en PowerShell y en Bash; solo se admite el handle `eduolihez` en docs).
+  - `git ls-files` comparado con la allowlist, y `git grep -n -I -P '(?i)<usuario>(?!ihez)|C:\x5c+Users'` sin salida, sustituyendo `<usuario>` por el nombre de usuario local (el patrón va entre comillas simples: en Git Bash interactivo, entre comillas dobles el `!` de `(?!ihez)` activa la expansión del historial; ejecutarlo desde PowerShell también vale. La barra invertida va como `\x5c` para no escribir una ruta literal; solo se admite el handle `eduolihez` en docs).
 - [ ] **Step 2: Dry-run sobre el `~/.claude` real**: `powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -DryRun`. Mostrar la salida; no instalar de verdad salvo que el usuario lo pida.
 - [ ] **Step 3: PARAR y pedir confirmación** al usuario para crear el repo remoto privado, enseñándole la salida del Step 1.
 - [ ] **Step 4: Poner main al dia** (dos comandos; PowerShell 5.1 no tiene `&&`):
@@ -262,7 +262,9 @@
 
 - [ ] **Step 1: Pedir confirmación explícita** al usuario para hacer público el repo, recordando que el contenido puede quedar indexado aunque se borre después.
 - [ ] **Step 2: Con confirmación**, `gh repo edit eduolihez/claude-code-setup --visibility public --accept-visibility-change-consequences`. Verificar con `gh repo view eduolihez/claude-code-setup --json visibility`: `PUBLIC`.
-- [ ] **Step 3: Etiquetar la versión** — `git tag v0.1.0 && git push origin v0.1.0`.
+- [ ] **Step 3: Etiquetar la versión** — dos comandos (PowerShell 5.1 no tiene `&&`):
+  - `git tag v0.1.0`
+  - `git push origin v0.1.0`
 
 ---
 
