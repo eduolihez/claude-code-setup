@@ -58,6 +58,48 @@ Describe 'Skills' {
     }
 }
 
+Describe 'Skills hackathon-scaffold e ioc-defang' {
+    BeforeAll {
+        function Get-SkillBody([string]$Path) {
+            $raw = Get-Content -Raw -LiteralPath $Path
+            $m = [regex]::Match($raw, '(?s)\A---\r?\n.*?\r?\n---\r?\n(.*)\z')
+            if (-not $m.Success) { throw "Sin frontmatter: $Path" }
+            $m.Groups[1].Value
+        }
+        $script:hsPath = Join-Path $script:repoRoot 'claude\skills\hackathon-scaffold\SKILL.md'
+        $script:iocPath = Join-Path $script:repoRoot 'claude\skills\ioc-defang\SKILL.md'
+    }
+    It '<Name>: existe' -ForEach @(
+        @{ Name = 'hackathon-scaffold' }
+        @{ Name = 'ioc-defang' }
+    ) {
+        (Join-Path $script:repoRoot "claude\skills\$Name\SKILL.md") | Should -Exist
+    }
+    It 'hackathon-scaffold tiene disable-model-invocation true' {
+        $fm = Get-Frontmatter -Path $script:hsPath
+        [string]$fm['disable-model-invocation'] | Should -BeExactly 'true'
+    }
+    It 'ioc-defang no desactiva la invocacion del modelo' {
+        $fm = Get-Frontmatter -Path $script:iocPath
+        $fm.Contains('disable-model-invocation') | Should -BeFalse
+    }
+    It 'cuerpo de hackathon-scaffold menciona <Needle>' -ForEach @(
+        @{ Needle = 'MVP' }
+        @{ Needle = 'README' }
+        @{ Needle = 'checklist' }
+    ) {
+        $body = Get-SkillBody $script:hsPath
+        $body.IndexOf($Needle, [StringComparison]::OrdinalIgnoreCase) | Should -BeGreaterOrEqual 0
+    }
+    It 'cuerpo de ioc-defang contiene el ejemplo <Needle>' -ForEach @(
+        @{ Needle = 'hxxps://example[.]com' }
+        @{ Needle = '192[.]0[.]2[.]1' }
+    ) {
+        $body = Get-SkillBody $script:iocPath
+        $body.Contains($Needle) | Should -BeTrue
+    }
+}
+
 Describe 'settings.json' {
     It 'es JSON valido' {
         { Get-Content -Raw -LiteralPath $script:settingsPath | ConvertFrom-Json } | Should -Not -Throw
