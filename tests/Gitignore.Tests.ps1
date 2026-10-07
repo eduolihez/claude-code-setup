@@ -18,7 +18,7 @@ Describe 'gitignore allowlist' {
         'claude/CLAUDE.md', 'claude/settings.json', 'claude/agents/a.md', 'claude/hooks/a.ps1',
         'claude/skills/s/SKILL.md', 'templates/web.md', 'docs/roadmap.md', 'tests/X.Tests.ps1',
         'scripts/Get-Frontmatter.ps1', '.github/workflows/ci.yml', '.githooks/pre-commit',
-        'plugin/README.md', 'PSScriptAnalyzerSettings.psd1', '.markdownlint.jsonc'
+        'plugin/README.md', 'PSScriptAnalyzerSettings.psd1', '.markdownlint.jsonc', '.markdownlint-cli2.jsonc'
     ) {
         Test-GitIgnored -RepoRoot $script:Root -Path $_ | Should -BeFalse
     }

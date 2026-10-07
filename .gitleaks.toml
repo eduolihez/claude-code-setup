@@ -1,0 +1,4 @@
+# Extiende las reglas por defecto de gitleaks. Sin allowlist: los tests
+# construyen los secretos de prueba en tiempo de ejecucion.
+[extend]
+useDefault = true

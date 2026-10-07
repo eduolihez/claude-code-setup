@@ -88,7 +88,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tests/Invoke-Tests.ps1
 
 Necesita Pester 5.5 o superior. Los tests del instalador usan carpetas temporales y no tocan tu `.claude`. Los de modo enlace solo corren si la máquina puede crear symlinks.
 
-La integración continua ejecuta gitleaks, PSScriptAnalyzer, Pester y markdownlint en cada push y pull request.
+La integración continua ejecuta gitleaks, PSScriptAnalyzer, Pester y markdownlint en cada push y pull request. El lint de markdown excluye `claude/` y `templates/`, que son prompts con formato compacto.
 
 ### Pre-commit local (opcional)
 
