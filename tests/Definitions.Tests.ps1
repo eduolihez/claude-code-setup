@@ -65,6 +65,37 @@ Describe 'settings.json' {
         $cmds.Count | Should -BeGreaterThan 0
         foreach ($c in $cmds) { $c | Should -Match '%USERPROFILE%' }
     }
+    It 'hay un hook PreToolUse para Write y Edit que referencia block-secrets-write.ps1' {
+        $json = Get-Content -Raw -LiteralPath $script:settingsPath | ConvertFrom-Json
+        $matches2 = @()
+        foreach ($grp in @($json.hooks.PreToolUse)) {
+            $m = [string]$grp.matcher
+            if ($m -match '\bWrite\b' -and $m -match '\bEdit\b') {
+                foreach ($h in @($grp.hooks)) {
+                    if ([string]$h.command -match 'block-secrets-write\.ps1') { $matches2 += $h }
+                }
+            }
+        }
+        $matches2.Count | Should -BeGreaterThan 0
+    }
+    It 'todo script de hook referenciado en settings.json existe en claude/hooks' {
+        $json = Get-Content -Raw -LiteralPath $script:settingsPath | ConvertFrom-Json
+        $cmds = @()
+        foreach ($evt in $json.hooks.PSObject.Properties) {
+            foreach ($grp in @($evt.Value)) {
+                foreach ($h in @($grp.hooks)) { $cmds += [string]$h.command }
+            }
+        }
+        if ($json.PSObject.Properties['statusLine']) { $cmds += [string]$json.statusLine.command }
+        $names = @()
+        foreach ($c in $cmds) {
+            foreach ($m in [regex]::Matches($c, 'claude\\hooks\\([A-Za-z0-9._-]+\.ps1)')) { $names += $m.Groups[1].Value }
+        }
+        $names.Count | Should -BeGreaterThan 0
+        foreach ($n in $names) {
+            (Join-Path $script:repoRoot "claude\hooks\$n") | Should -Exist
+        }
+    }
 }
 
 Describe 'Contenido prohibido en claude/' {
