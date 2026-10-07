@@ -71,7 +71,9 @@ claude-code-setup/
 - Gestiona solo una lista fija de rutas: `CLAUDE.md`, `settings.json`, `agents/`, `hooks/` y las skills propias. Nunca toca `.credentials.json`, `projects/`, `sessions/` ni `history.jsonl`.
 - Modo por defecto: symlinks. Si Windows no permite crearlos (sin modo desarrollador ni admin), usa copia y avisa.
 - Antes de modificar nada, mueve lo existente a `~/.claude/backups/setup-YYYYMMDD-HHMMSS/`.
-- Flags: `-DryRun`, `-Copy`, `-Uninstall` (restaura el último backup).
+- Flags: `-DryRun`, `-Copy`, `-Uninstall`.
+- `-Uninstall` devuelve cada ruta gestionada a su estado previo a instalar: la restaura desde el backup `setup-*` más antiguo que la contiene, o la quita si no está en ninguno. Antes, lo instalado que difiere del repo (por ejemplo, memoria `#` añadida a `CLAUDE.md`) se mueve a `~/.claude/backups/pre-uninstall-YYYYMMDD-HHMMSS/`. Los backups se conservan.
+- Un enlace previo del usuario en una ruta gestionada se mueve tal cual al backup y `-Uninstall` lo recrea.
 - Las rutas de hooks en `settings.json` usan `%USERPROFILE%`.
 - Al terminar, verifica cada destino e imprime el resultado. Termina con código distinto de cero si algo falla.
 

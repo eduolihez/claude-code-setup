@@ -9,21 +9,37 @@ Requiere Windows con PowerShell 5.1.
 ```powershell
 git clone https://github.com/eduolihez/claude-code-setup.git
 cd claude-code-setup
-.\install.ps1 -DryRun     # muestra qué haría, sin tocar nada
-.\install.ps1             # instala en %USERPROFILE%\.claude
-.\install.ps1 -Uninstall  # restaura el backup más reciente
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -DryRun     # muestra qué haría, sin tocar nada
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1             # instala en %USERPROFILE%\.claude
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall  # vuelve al estado previo a instalar
 ```
 
-Parámetros de `install.ps1`:
+La política de ejecución por defecto de Windows no deja ejecutar scripts. `-ExecutionPolicy Bypass` la salta solo para ese comando.
+
+Parámetros de `install.ps1` (todos se pasan igual: `powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 [-DryRun|-Copy|-Uninstall|-TargetDir <ruta>]`):
 
 - `-TargetDir`: carpeta de destino. Por defecto `%USERPROFILE%\.claude`.
 - `-Copy`: copia los archivos en lugar de enlazarlos.
 - `-DryRun`: simula la operación e imprime los pasos.
-- `-Uninstall`: quita lo instalado y restaura el backup más reciente. Si no hay backups, aborta sin borrar nada.
+- `-Uninstall`: deja cada archivo gestionado como estaba antes de instalar. Lo restaura desde el backup más antiguo que lo contiene, o lo quita si no existía. Lo que hayas editado desde la última instalación se guarda antes en `backups\pre-uninstall-<fecha>`. Los backups no se borran. Si no hay ningún backup, aborta sin borrar nada.
 
 Por defecto el instalador crea enlaces simbólicos, así que editar el repo cambia la configuración activa. En Windows eso exige modo desarrollador o una consola de administrador. Sin ese permiso, el instalador avisa y copia los archivos. Lo que ya existía en el destino se guarda antes en `backups\setup-<fecha>` dentro de `TargetDir`.
 
 El instalador solo gestiona `CLAUDE.md`, `settings.json`, `agents/`, `hooks/` y las carpetas de `skills/` que están en este repo. No toca credenciales, historial, sesiones ni otras skills que ya tengas.
+
+### Actualizar
+
+```powershell
+git pull
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+```
+
+Volver a ejecutar el instalador enlaza o copia lo nuevo del repo. En modo copia, si una copia instalada difiere de la nueva versión, va antes a `backups\setup-<fecha>`.
+
+### Notas
+
+- En modo enlace, `settings.json` y `CLAUDE.md` de `~/.claude` apuntan al repo. Lo que Claude Code escribe en ellos (permisos, plugins, modelo, memoria `#`) acaba en `claude/`. Revisa `git diff claude/` antes de hacer commit.
+- Con un `-TargetDir` distinto del de por defecto, las rutas de los hooks en `settings.json` siguen apuntando a `%USERPROFILE%\.claude\hooks`.
 
 ## Estructura
 
@@ -40,6 +56,9 @@ plugin/            reservado para la Fase 2
 scripts/           utilidades de los tests
 tests/             tests Pester
 install.ps1        instalador
+LICENSE            licencia MIT
+CHANGELOG.md       historial de versiones
+SECURITY.md        qué se publica y cómo reportar problemas
 ```
 
 ## Qué hace cada pieza

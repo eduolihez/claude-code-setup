@@ -6,7 +6,7 @@ Este repo no incluye código de terceros. Lo siguiente se instala aparte.
 
 - Plugin: `superpowers@superpowers-marketplace`.
 - Marketplace: `obra/superpowers-marketplace` (GitHub). Repositorio: <https://github.com/obra/superpowers-marketplace>.
-- Ya está declarado en `claude/settings.json` (`extraKnownMarketplaces` y `enabledPlugins`), así que Claude Code lo ofrece al instalar la configuración.
+- El marketplace y el plugin están declarados en `claude/settings.json` (`extraKnownMarketplaces` y `enabledPlugins`).
 
 ## Skills de terceros (gstack)
 
