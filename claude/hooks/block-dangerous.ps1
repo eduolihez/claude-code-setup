@@ -3,9 +3,9 @@
 # Ante entrada vacia o invalida no bloquea: imprime "{}" y sale con 0.
 
 function Get-DenyReason([string]$Cmd) {
-    # rm con flags recursivo (-r/-R/--recursive) y force (-f/--force), en cualquier
-    # orden o combinacion (-rf, -fr, -r -f, -Rf). Insensible a mayusculas.
-    $rm = [regex]::Match($Cmd, '(?i)(?:^|[\s;&|(])rm((?:\s+--?[a-z][a-z-]*)+)')
+    # rm (incluido /bin/rm o rm escapado con barra inversa) con flags recursivo (-r/-R/--recursive)
+    # y force (-f/--force), en cualquier orden o combinacion (-rf, -fr, -r -f, -Rf). Insensible a mayusculas.
+    $rm = [regex]::Match($Cmd, '(?i)(?:^|[\s;&|(/\\])rm((?:\s+--?[a-z][a-z-]*)+)')
     if ($rm.Success) {
         $flags = $rm.Groups[1].Value
         $recursive = $flags -match '(?i)\s-[a-z]*r|\s--recursive'

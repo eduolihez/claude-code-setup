@@ -9,7 +9,9 @@ BeforeDiscovery {
         'git push --force-with-lease',
         'sudo rm -rf x',
         'rm -Rf x',
-        'git push origin main --force'
+        'git push origin main --force',
+        '/bin/rm -rf x',
+        '\rm -rf x'
     ) | ForEach-Object { @{ Cmd = $_ } }
     $script:allowCases = @(
         'git status',
@@ -17,7 +19,9 @@ BeforeDiscovery {
         'git push origin main',
         'npm run test',
         'git push --follow-tags',
-        'rm -r dir'
+        'rm -r dir',
+        'git rm file',
+        'npm run farm'
     ) | ForEach-Object { @{ Cmd = $_ } }
 }
 
