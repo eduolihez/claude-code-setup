@@ -148,10 +148,51 @@ Describe 'install.ps1 (modo copia)' {
         $t = Join-Path $TestDrive 'archivo.txt'
         Set-Content -LiteralPath $t -Value 'soy un archivo'
         $before = Get-FileHashValue $t
+        $dirsBefore = @(Get-ChildItem -LiteralPath $TestDrive -Directory | ForEach-Object { $_.Name })
         $r = Invoke-Install $t
         $r.ExitCode | Should -Not -Be 0
         (Get-Item -LiteralPath $t).PSIsContainer | Should -BeFalse
         Get-FileHashValue $t | Should -Be $before
-        Test-Path -LiteralPath (Join-Path $TestDrive 'backups') | Should -BeFalse
+        @(Get-ChildItem -LiteralPath $TestDrive -Directory | ForEach-Object { $_.Name }) | Should -Be $dirsBefore
+    }
+
+    It 'mueve una skill del repo modificada a backups y deja la copia exacta, sin tocar skills ajenas' {
+        $t = Join-Path $TestDrive 'skillbk'
+        New-Target $t
+        $skill = (Get-ChildItem -LiteralPath (Join-Path $script:src 'skills') -Directory | Select-Object -First 1).Name
+        $sd = Join-Path $t "skills\$skill"
+        New-Item -ItemType Directory -Force -Path $sd | Out-Null
+        Set-Content -LiteralPath (Join-Path $sd 'SKILL.md') -Value 'modificada en destino'
+        Set-Content -LiteralPath (Join-Path $sd 'extra.md') -Value 'extra'
+        $modHash = Get-FileHashValue (Join-Path $sd 'SKILL.md')
+        $gst = Get-FileHashValue (Join-Path $t 'skills\gstack\SKILL.md')
+        $r = Invoke-Install $t
+        $r.ExitCode | Should -Be 0 -Because $r.Stdout
+        $dirs = Get-BackupDirs $t
+        $dirs.Count | Should -Be 1
+        $bk = Join-Path $dirs[0].FullName "skills\$skill"
+        Get-FileHashValue (Join-Path $bk 'SKILL.md') | Should -Be $modHash
+        Test-Path -LiteralPath (Join-Path $bk 'extra.md') | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path $sd 'extra.md') | Should -BeFalse
+        $repoSkill = Join-Path $script:src "skills\$skill"
+        $repoFiles = @(Get-ChildItem -LiteralPath $repoSkill -Recurse -File)
+        $repoFiles.Count | Should -BeGreaterThan 0
+        foreach ($f in $repoFiles) {
+            $rel = $f.FullName.Substring($repoSkill.TrimEnd('').Length + 1)
+            Get-FileHashValue (Join-Path $sd $rel) | Should -Be (Get-FileHashValue $f.FullName) -Because $rel
+        }
+        Get-FileHashValue (Join-Path $t 'skills\gstack\SKILL.md') | Should -Be $gst
+    }
+
+    It 'no crea backups si las skills del destino ya son identicas al repo' {
+        $t = Join-Path $TestDrive 'skillsame'
+        New-Target $t
+        $skillsDst = Join-Path $t 'skills'
+        foreach ($s in Get-ChildItem -LiteralPath (Join-Path $script:src 'skills') -Directory) {
+            Copy-Item -LiteralPath $s.FullName -Destination (Join-Path $skillsDst $s.Name) -Recurse
+        }
+        $r = Invoke-Install $t
+        $r.ExitCode | Should -Be 0 -Because $r.Stdout
+        Test-Path -LiteralPath (Join-Path $t 'backups') | Should -BeFalse
     }
 }

@@ -70,7 +70,20 @@ function Get-BackupDir {
         $base = Join-Path $TargetDir ('backups\setup-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
         $cand = $base
         $i = 1
-        while (Test-Path -LiteralPath $cand) { $cand = "$base-$i"; $i++ }
+        if ($DryRun) {
+            while (Test-Path -LiteralPath $cand) { $cand = "$base-$i"; $i++ }
+        }
+        else {
+            # Reserva atomica: New-Item sin -Force falla si la carpeta ya existe.
+            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $base) | Out-Null
+            while ($true) {
+                try { New-Item -ItemType Directory -Path $cand | Out-Null; break }
+                catch {
+                    if (-not (Test-Path -LiteralPath $cand)) { throw }
+                    $cand = "$base-$i"; $i++
+                }
+            }
+        }
         $script:backupDir = $cand
     }
     return $script:backupDir
@@ -115,6 +128,10 @@ foreach ($e in $entries) {
 
 if ($DryRun) {
     Write-Host '[DryRun] Simulacion terminada, no se modifico nada.'
+    if ($failed -gt 0) {
+        Write-Host "ERROR: $failed entradas con problemas."
+        exit 1
+    }
     exit 0
 }
 
