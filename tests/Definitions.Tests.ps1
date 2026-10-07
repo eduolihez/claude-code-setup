@@ -40,8 +40,15 @@ Describe 'settings.json' {
     }
     It 'no contiene C:\Users ni <usuario>' {
         $text = Get-Content -Raw -LiteralPath $script:settingsPath
-        $text | Should -Not -Match 'C:\+Users'
+        $text | Should -Not -Match '(?i)C:[\\/]+Users'
         $text | Should -Not -Match '(?i)<usuario>'
+    }
+    It 'el patron de C:\Users detecta <Text> = <Expected>' -ForEach @(
+        @{ Text = 'C:\Users\x';   Expected = $true }
+        @{ Text = 'C:\\Users\\x'; Expected = $true }
+        @{ Text = 'C:/otro';      Expected = $false }
+    ) {
+        ($Text -match '(?i)C:[\\/]+Users') | Should -Be $Expected
     }
     It 'todo command de hook contiene %USERPROFILE%' {
         $json = Get-Content -Raw -LiteralPath $script:settingsPath | ConvertFrom-Json
@@ -55,6 +62,7 @@ Describe 'settings.json' {
                 }
             }
         }
+        $cmds.Count | Should -BeGreaterThan 0
         foreach ($c in $cmds) { $c | Should -Match '%USERPROFILE%' }
     }
 }
