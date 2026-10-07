@@ -89,7 +89,7 @@
   - `claude/` no contiene `.credentials.json`, `history.jsonl`, `projects`, `sessions` ni `backups`.
 - [ ] **Step 2: Ejecutar** el runner. Esperado: FAIL (no existe `claude/`).
 - [ ] **Step 3: Copiar** desde `<ruta-local-de-.claude>` solo los 9 archivos de la lista (`Copy-Item`, nunca el directorio entero).
-- [ ] **Step 4: Revisión manual de secretos**: `git grep -n -i -E "token|secret|password|api[_-]?key|<usuario>|C:\\\\Users"` sobre `claude/` (`<usuario>` es el nombre de usuario local). Esperado: sin coincidencias; si aparece alguna, se corrige antes de continuar y se muestra al usuario.
+- [ ] **Step 4: Revisión manual de secretos**: `git grep -n -i -P "token|secret|password|api[_-]?key|<usuario>|C:\x5c+Users"` sobre `claude/` (`<usuario>` es el nombre de usuario local). Esperado: sin coincidencias; si aparece alguna, se corrige antes de continuar y se muestra al usuario.
 - [ ] **Step 5: Ejecutar** el runner. Esperado: PASS.
 - [ ] **Step 6: Commit** — `feat: importa el setup actual (CLAUDE.md, settings, agentes, hooks y skills propias)`.
 
@@ -247,10 +247,12 @@
   - `powershell -NoProfile -ExecutionPolicy Bypass -File tests/Invoke-Tests.ps1`: 0 fallos.
   - `Invoke-ScriptAnalyzer ...` y `npx markdownlint-cli2 "**/*.md" "#docs/superpowers" "#.superpowers" "#node_modules"`: sin hallazgos.
   - `docker run --rm -v "<ruta-local>:/repo" zricethezav/gitleaks:latest detect --source /repo --log-opts="--all" -v`: `no leaks found`.
-  - `git ls-files` comparado con la allowlist, y `git grep -n -I -P "(?i)<usuario>(?!ihez)|C:\\\\Users"` sin salida (`<usuario>` es el nombre de usuario local; solo se admite el handle `eduolihez` en docs).
+  - `git ls-files` comparado con la allowlist, y `git grep -n -I -P "(?i)<usuario>(?!ihez)|C:\x5c+Users"` sin salida, sustituyendo `<usuario>` por el nombre de usuario local (la barra invertida va como `\x5c` para que el comando funcione igual en PowerShell y en Bash; solo se admite el handle `eduolihez` en docs).
 - [ ] **Step 2: Dry-run sobre el `~/.claude` real**: `powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 -DryRun`. Mostrar la salida; no instalar de verdad salvo que el usuario lo pida.
 - [ ] **Step 3: PARAR y pedir confirmación** al usuario para crear el repo remoto privado, enseñándole la salida del Step 1.
-- [ ] **Step 4: Poner main al dia**: `git checkout main && git merge --ff-only feat/initial-setup`.
+- [ ] **Step 4: Poner main al dia** (dos comandos; PowerShell 5.1 no tiene `&&`):
+  - `git checkout main`
+  - `git merge --ff-only feat/initial-setup`
 - [ ] **Step 5: Con confirmación**, `gh repo create eduolihez/claude-code-setup --private --source . --remote origin --push --description "Mi setup de Claude Code: permisos, hooks, agentes y skills para SOC/Blue Team y desarrollo"`. Verificar con `gh repo view eduolihez/claude-code-setup --json visibility,url`: `PRIVATE`, y con `gh repo view eduolihez/claude-code-setup --json defaultBranchRef`: `main`.
 - [ ] **Step 6: Verificar el CI remoto**: `gh run watch` sobre el último run. Esperado: todos los jobs en verde. Si falla, corregir y repetir antes de seguir.
 
